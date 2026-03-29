@@ -20,7 +20,7 @@ const holdingSchema = z.object({
   quantity: z.number({ message: '请输入数量' }).positive('数量必须大于0'),
   fee: z.number({ message: '请输入手续费' }).min(0, '手续费不能为负'),
   buyDate: z.string().min(1, '请选择买入日期'),
-  notes: z.string().optional().default(''),
+  notes: z.string().default(''),
 })
 
 export type HoldingFormData = z.infer<typeof holdingSchema>
@@ -39,7 +39,7 @@ export default function HoldingForm({ initialValues, onSubmit, onCancel, loading
     reset,
     formState: { errors },
   } = useForm<HoldingFormData>({
-    resolver: zodResolver(holdingSchema),
+    resolver: zodResolver(holdingSchema) as any,
     defaultValues: {
       name: '',
       ticker: '',
@@ -70,7 +70,7 @@ export default function HoldingForm({ initialValues, onSubmit, onCancel, loading
   }, [initialValues, reset])
 
   return (
-    <Form layout="vertical" onFinish={handleSubmit(onSubmit)}>
+    <Form layout="vertical" onFinish={handleSubmit(onSubmit as any)}>
       <Form.Item
         label="资产名称"
         required

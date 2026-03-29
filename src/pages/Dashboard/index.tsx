@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react'
-import { Row, Col, Card, Statistic, Alert, Spin, Typography, CardProps } from 'antd'
+import { Row, Col, Card, Statistic, Alert, Spin, Typography } from 'antd'
 import {
   FundOutlined,
   DollarOutlined,
@@ -13,7 +13,6 @@ import { useQuoteStore } from '../../stores/quoteStore'
 import { useConfigStore } from '../../stores/configStore'
 import { calculateCategoryWeights, calcMarketValue, isRebalanceTriggered } from '../../services/calcService'
 import { formatCurrency } from '../../utils/formatters'
-import { CATEGORIES, CATEGORY_LABELS } from '../../types'
 import WeightPieChart from '../../components/charts/WeightPieChart'
 import BandGauge from '../../components/charts/BandGauge'
 
@@ -147,7 +146,7 @@ export default function Dashboard() {
             <Card hoverable>
               <Statistic
                 title="数据更新时间"
-                value={lastUpdated ? new Date(lastUpdated) : undefined}
+                value={lastUpdated ? new Date(lastUpdated).getTime() : undefined}
                 prefix={<ClockCircleOutlined />}
                 formatter={() =>
                   lastUpdated

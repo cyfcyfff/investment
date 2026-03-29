@@ -41,12 +41,13 @@ export async function fetchQuotes(tickers: string[]): Promise<Quote[]> {
   const quotes: Quote[] = []
 
   for (let i = 0; i < results.length; i++) {
-    if (results[i].status === 'fulfilled') {
-      quotes.push(results[i].value)
+    const result = results[i]
+    if (result.status === 'fulfilled') {
+      quotes.push(result.value)
     } else {
       console.warn(
         `Failed to fetch quote for ${tickers[i]}:`,
-        (results[i] as PromiseRejectedResult).reason,
+        result.reason,
       )
     }
   }

@@ -3,7 +3,7 @@ import { Table, Button, Drawer, Space, Empty, Popconfirm, message, Tag, Spin, Ty
 import { PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons'
 import { usePortfolioStore } from '../../stores/portfolioStore'
 import { useQuoteStore } from '../../stores/quoteStore'
-import { CATEGORY_LABELS, Category, CATEGORIES } from '../../types'
+import { CATEGORY_LABELS, Category } from '../../types'
 import type { AssetHolding } from '../../types'
 import { formatCurrency, formatNumber } from '../../utils/formatters'
 import HoldingForm from '../../components/forms/HoldingForm'

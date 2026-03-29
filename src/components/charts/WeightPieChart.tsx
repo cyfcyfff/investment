@@ -1,4 +1,4 @@
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from 'recharts'
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts'
 import { Category, CATEGORIES, CATEGORY_LABELS } from '../../types'
 import type { RebalanceConfig } from '../../types'
 
@@ -26,7 +26,6 @@ interface PieDataItem {
 export default function WeightPieChart({ weights, config }: WeightPieChartProps) {
   const data: PieDataItem[] = CATEGORIES.map((cat) => {
     const weight = weights[cat] ?? 0
-    const target = config.targets[cat] ?? 0
     const band = config.bands
 
     let fill = CATEGORY_COLORS[cat]
@@ -65,7 +64,7 @@ export default function WeightPieChart({ weights, config }: WeightPieChartProps)
               <Cell key={`cell-${index}`} fill={entry.fill} />
             ))}
           </Pie>
-          <Tooltip formatter={(value: number) => [`${value}%`, '权重']} />
+          <Tooltip formatter={(value) => [`${value}%`, '权重']} />
         </PieChart>
       </ResponsiveContainer>
       <div style={{ display: 'flex', justifyContent: 'center', gap: 16, flexWrap: 'wrap' }}>
