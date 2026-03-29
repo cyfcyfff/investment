@@ -16,8 +16,8 @@ export interface FxRate {
   source: string
 }
 
-export type QuoteSource = 'YAHOO' | 'ALPHA_VANTAGE' | 'TWELVE_DATA' | 'CACHE'
-export type FxSource = 'YAHOO' | 'EXCHANGE_RATE_HOST' | 'CACHE'
+export type QuoteSource = 'YAHOO' | 'FMP' | 'ALPHA_VANTAGE' | 'TWELVE_DATA' | 'CACHE'
+export type FxSource = 'YAHOO' | 'FMP' | 'EXCHANGE_RATE_HOST' | 'OPEN_ER_API' | 'CACHE'
 
 export interface QuoteCacheEntry {
   quote: Quote

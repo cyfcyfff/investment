@@ -55,7 +55,7 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
   baseCurrency: 'USD',
   quoteRefreshInterval: 15,
   priceBasis: 'CLOSE',
-  apiKeys: {},
+  apiKeys: { fmp: '0veYpGgR4AHSLiS6Z6ezGb2vkRlj6c7g' },
   defaultTickers: {
     STOCKS: ['VT'],
     LONG_BONDS: ['IGOV'],

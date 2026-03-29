@@ -10,9 +10,10 @@ import {
   Space,
   Typography,
   Popconfirm,
+  Input,
   message,
 } from 'antd'
-import { UndoOutlined, WarningOutlined } from '@ant-design/icons'
+import { UndoOutlined, WarningOutlined, KeyOutlined } from '@ant-design/icons'
 import { useConfigStore } from '../../stores/configStore'
 import { Category, CATEGORIES, CATEGORY_LABELS, BAND_PRESETS } from '../../types'
 import type { BandPreset } from '../../types'
@@ -42,6 +43,13 @@ export default function Settings() {
       updateAppConfig({ baseCurrency: value })
     },
     [updateAppConfig],
+  )
+
+  const handleApiKeyChange = useCallback(
+    (value: string) => {
+      updateAppConfig({ apiKeys: { ...appConfig.apiKeys, fmp: value } })
+    },
+    [appConfig.apiKeys, updateAppConfig],
   )
 
   const handleRefreshIntervalChange = useCallback(
@@ -149,6 +157,36 @@ export default function Settings() {
                 </Select.Option>
               ))}
             </Select>
+          </Form.Item>
+        </Form>
+      </Card>
+
+      {/* API Keys */}
+      <Card
+        title={
+          <Space>
+            <KeyOutlined />
+            API 密钥
+          </Space>
+        }
+        style={{ marginBottom: 16 }}
+      >
+        <Form layout="vertical">
+          <Form.Item
+            label="Financial Modeling Prep (FMP) API Key"
+            extra={
+              <span>
+                用于获取实时股票行情数据。
+                请在 <a href="https://financialmodelingprep.com/developer/docs" target="_blank" rel="noopener noreferrer">FMP 官网</a> 注册获取免费 API Key。
+              </span>
+            }
+          >
+            <Input.Password
+              value={appConfig.apiKeys?.fmp ?? ''}
+              onChange={(e) => handleApiKeyChange(e.target.value)}
+              placeholder="请输入 FMP API Key"
+              style={{ maxWidth: 400 }}
+            />
           </Form.Item>
         </Form>
       </Card>

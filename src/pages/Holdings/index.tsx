@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Table, Button, Drawer, Space, Empty, Popconfirm, message, Tag, Spin, Typography } from 'antd'
+import { Table, Button, Drawer, Space, Empty, Popconfirm, message, Tag, Spin, Typography, Alert } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons'
 import { usePortfolioStore } from '../../stores/portfolioStore'
 import { useQuoteStore } from '../../stores/quoteStore'
@@ -21,7 +21,7 @@ const CATEGORY_COLORS: Record<Category, string> = {
 
 export default function Holdings() {
   const { holdings, loading, loadHoldings, addHolding, updateHolding, deleteHolding } = usePortfolioStore()
-  const { quotes, refreshQuotes, loading: quoteLoading } = useQuoteStore()
+  const { quotes, refreshAll, loading: quoteLoading, error: quoteError } = useQuoteStore()
   const { appConfig } = useConfigStore()
 
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -35,10 +35,12 @@ export default function Holdings() {
   // Refresh quotes when holdings change
   useEffect(() => {
     if (holdings.length > 0) {
-      const tickers = holdings.map((h) => h.ticker)
-      refreshQuotes(tickers)
+      const tickers = holdings.map((h) => h.ticker.trim().toUpperCase())
+      const currencies = holdings.map((h) => h.currency)
+      const apiKey = appConfig.apiKeys?.fmp ?? ''
+      refreshAll(tickers, currencies, appConfig.baseCurrency, apiKey)
     }
-  }, [holdings, refreshQuotes])
+  }, [holdings, appConfig.baseCurrency, appConfig.apiKeys, refreshAll])
 
   const handleAdd = useCallback(async (data: HoldingFormData) => {
     setSubmitLoading(true)
@@ -128,7 +130,7 @@ export default function Holdings() {
       title: '当前价格',
       key: 'currentPrice',
       render: (_: unknown, record: AssetHolding) => {
-        const quote = quotes[record.ticker]
+        const quote = quotes[record.ticker.trim().toUpperCase()]
         if (!quote) return '-'
         return formatCurrency(quote.price, record.currency)
       },
@@ -137,7 +139,7 @@ export default function Holdings() {
       title: '市值',
       key: 'marketValue',
       render: (_: unknown, record: AssetHolding) => {
-        const quote = quotes[record.ticker]
+        const quote = quotes[record.ticker.trim().toUpperCase()]
         if (!quote) return '-'
         const fxKey = `${record.currency}-${appConfig.baseCurrency}`
         const fxRate = record.currency === appConfig.baseCurrency ? 1 : (useQuoteStore.getState().fxRates[fxKey]?.rate ?? 1)
@@ -192,7 +194,10 @@ export default function Holdings() {
             onClick={() => {
               loadHoldings()
               if (holdings.length > 0) {
-                refreshQuotes(holdings.map((h) => h.ticker))
+                const tickers = holdings.map((h) => h.ticker.trim().toUpperCase())
+                const currencies = holdings.map((h) => h.currency)
+                const apiKey = appConfig.apiKeys?.fmp ?? ''
+                refreshAll(tickers, currencies, appConfig.baseCurrency, apiKey)
               }
             }}
             loading={loading || quoteLoading}
@@ -204,6 +209,18 @@ export default function Holdings() {
           </Button>
         </Space>
       </div>
+
+      {quoteError && (
+        <Alert
+          type="error"
+          message="行情数据获取失败"
+          description={quoteError}
+          showIcon
+          closable
+          onClose={() => useQuoteStore.setState({ error: null })}
+          style={{ marginBottom: 16 }}
+        />
+      )}
 
       <Spin spinning={loading}>
         {holdings.length === 0 ? (

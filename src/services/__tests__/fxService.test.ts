@@ -1,15 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { fetchFxRate, fetchFxRates } from '../fxService'
 
-const mockYahooFxResponse = (rate: number) => ({
-  chart: {
-    result: [{
-      meta: {
-        regularMarketPrice: rate,
-        regularMarketTime: 1705312800,
-      },
-    }],
-  },
+const mockErApiResponse = (rates: Record<string, number>) => ({
+  result: 'success',
+  provider: 'European Central Bank',
+  documentation: 'https://open.er-api.com/v6/latest',
+  terms_of_use: 'https://open.er-api.com/terms',
+  time_last_update_unix: 1705312800,
+  time_last_update_utc: '2024-01-15 12:00:00',
+  time_next_update_unix: 1705399200,
+  time_next_update_utc: '2024-01-16 12:00:00',
+  time_eol_unix: 0,
+  base_code: 'USD',
+  rates,
 })
 
 describe('fetchFxRate', () => {
@@ -30,19 +33,19 @@ describe('fetchFxRate', () => {
     expect(fetch).not.toHaveBeenCalled()
   })
 
-  it('should fetch and parse FX rate from Yahoo', async () => {
+  it('should fetch FX rate from open exchange rate API', async () => {
     vi.mocked(fetch).mockResolvedValueOnce({
       ok: true,
-      json: async () => mockYahooFxResponse(0.85),
+      json: async () => mockErApiResponse({ GBP: 0.85 }),
     } as Response)
 
-    const result = await fetchFxRate('GBP', 'USD')
-    expect(result.base).toBe('GBP')
-    expect(result.quote).toBe('USD')
+    const result = await fetchFxRate('USD', 'GBP')
+    expect(result.base).toBe('USD')
+    expect(result.quote).toBe('GBP')
     expect(result.rate).toBe(0.85)
-    expect(result.source).toBe('YAHOO')
+    expect(result.source).toBe('OPEN_ER_API')
     expect(fetch).toHaveBeenCalledTimes(1)
-    expect(vi.mocked(fetch).mock.calls[0][0]).toContain('GBPUSD')
+    expect(vi.mocked(fetch).mock.calls[0][0]).toContain('latest/USD')
   })
 
   it('should throw on non-ok response', async () => {
@@ -53,6 +56,17 @@ describe('fetchFxRate', () => {
 
     await expect(fetchFxRate('XXX', 'USD')).rejects.toThrow(
       'Failed to fetch FX rate XXX/USD: 404',
+    )
+  })
+
+  it('should throw when rate not found in response', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => mockErApiResponse({ EUR: 0.9 }),
+    } as Response)
+
+    await expect(fetchFxRate('USD', 'GBP')).rejects.toThrow(
+      'No FX rate found for USD/GBP',
     )
   })
 })
@@ -71,30 +85,47 @@ describe('fetchFxRates', () => {
     expect(rates).toEqual({})
   })
 
-  it('should fetch multiple FX rates', async () => {
+  it('should fetch FX rates grouped by base currency', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => mockErApiResponse({ GBP: 0.85, JPY: 110.5 }),
+    } as Response)
+
+    const rates = await fetchFxRates([
+      { base: 'USD', quote: 'GBP' },
+      { base: 'USD', quote: 'JPY' },
+    ])
+    expect(rates['USD-GBP']).toBe(0.85)
+    expect(rates['USD-JPY']).toBe(110.5)
+    // One fetch call since both share the same base
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('should make separate requests for different base currencies', async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => mockYahooFxResponse(0.85),
+        json: async () => mockErApiResponse({ USD: 1.1 }),
       } as Response)
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => mockYahooFxResponse(110.5),
+        json: async () => mockErApiResponse({ JPY: 160 }),
       } as Response)
 
     const rates = await fetchFxRates([
-      { base: 'GBP', quote: 'USD' },
-      { base: 'JPY', quote: 'USD' },
+      { base: 'EUR', quote: 'USD' },
+      { base: 'GBP', quote: 'JPY' },
     ])
-    expect(rates['GBP-USD']).toBe(0.85)
-    expect(rates['JPY-USD']).toBe(110.5)
+    expect(rates['EUR-USD']).toBe(1.1)
+    expect(rates['GBP-JPY']).toBe(160)
+    expect(fetch).toHaveBeenCalledTimes(2)
   })
 
-  it('should skip failed pairs and return successful ones', async () => {
+  it('should skip failed base requests and return successful ones', async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => mockYahooFxResponse(0.85),
+        json: async () => mockErApiResponse({ USD: 1.1 }),
       } as Response)
       .mockResolvedValueOnce({
         ok: false,
@@ -102,16 +133,31 @@ describe('fetchFxRates', () => {
       } as Response)
 
     const rates = await fetchFxRates([
-      { base: 'GBP', quote: 'USD' },
+      { base: 'EUR', quote: 'USD' },
       { base: 'INVALID', quote: 'USD' },
     ])
-    expect(rates['GBP-USD']).toBe(0.85)
+    expect(rates['EUR-USD']).toBe(1.1)
     expect(rates['INVALID-USD']).toBeUndefined()
   })
 
   it('should handle same-currency pair without fetch', async () => {
     const rates = await fetchFxRates([{ base: 'USD', quote: 'USD' }])
-    expect(rates['USD-USD']).toBe(1)
+    // Same currency is skipped, so no fetch and empty result
+    expect(rates).toEqual({})
     expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('should filter out missing rates from response', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => mockErApiResponse({ GBP: 0.85 }),
+    } as Response)
+
+    const rates = await fetchFxRates([
+      { base: 'USD', quote: 'GBP' },
+      { base: 'USD', quote: 'CNY' },
+    ])
+    expect(rates['USD-GBP']).toBe(0.85)
+    expect(rates['USD-CNY']).toBeUndefined()
   })
 })

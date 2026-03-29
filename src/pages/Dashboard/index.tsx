@@ -32,9 +32,10 @@ export default function Dashboard() {
     if (holdings.length > 0) {
       const tickers = holdings.map((h) => h.ticker)
       const currencies = holdings.map((h) => h.currency)
-      refreshAll(tickers, currencies, appConfig.baseCurrency)
+      const apiKey = appConfig.apiKeys?.fmp ?? ''
+      refreshAll(tickers, currencies, appConfig.baseCurrency, apiKey)
     }
-  }, [holdings, refreshAll, appConfig.baseCurrency])
+  }, [holdings, refreshAll, appConfig.baseCurrency, appConfig.apiKeys])
 
   // Calculate prices map for calcService
   const pricesMap = useMemo(() => {

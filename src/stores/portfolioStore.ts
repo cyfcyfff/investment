@@ -28,7 +28,8 @@ export const usePortfolioStore = create<PortfolioState>((set) => ({
 
   addHolding: async (data) => {
     const now = new Date().toISOString()
-    const holding: AssetHolding = { ...data, id: generateId(), createdAt: now, updatedAt: now }
+    const normalizedTicker = data.ticker.trim().toUpperCase()
+    const holding: AssetHolding = { ...data, ticker: normalizedTicker, id: generateId(), createdAt: now, updatedAt: now }
     await db.holdings.add(holding)
     const tx: Transaction = {
       id: generateId(),
@@ -39,7 +40,7 @@ export const usePortfolioStore = create<PortfolioState>((set) => ({
       price: data.buyPrice,
       fee: data.fee,
       totalAmount: data.quantity * data.buyPrice + data.fee,
-      notes: `初始买入 ${data.ticker}`,
+      notes: `初始买入 ${normalizedTicker}`,
       createdAt: now,
     }
     await db.transactions.add(tx)
@@ -48,8 +49,11 @@ export const usePortfolioStore = create<PortfolioState>((set) => ({
 
   updateHolding: async (id, updates) => {
     const updatedAt = new Date().toISOString()
-    await db.holdings.update(id, { ...updates, updatedAt })
-    set(state => ({ holdings: state.holdings.map(h => h.id === id ? { ...h, ...updates, updatedAt } : h) }))
+    const normalizedUpdates: Partial<AssetHolding> = updates.ticker != null
+      ? { ...updates, ticker: updates.ticker.trim().toUpperCase() }
+      : updates
+    await db.holdings.update(id, { ...normalizedUpdates, updatedAt })
+    set(state => ({ holdings: state.holdings.map(h => h.id === id ? { ...h, ...normalizedUpdates, updatedAt } : h) }))
   },
 
   deleteHolding: async (id) => {
