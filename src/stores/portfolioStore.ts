@@ -1,22 +1,27 @@
 import { create } from 'zustand'
 import { db } from '../db'
-import type { AssetHolding, Transaction } from '../types'
+import type { AssetHolding, Transaction, PortfolioSnapshot } from '../types'
 import { generateId } from '../utils/formatters'
 
 interface PortfolioState {
   holdings: AssetHolding[]
   transactions: Transaction[]
+  snapshots: PortfolioSnapshot[]
   loading: boolean
   loadHoldings: () => Promise<void>
   addHolding: (holding: Omit<AssetHolding, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>
   updateHolding: (id: string, updates: Partial<AssetHolding>) => Promise<void>
   deleteHolding: (id: string) => Promise<void>
   addTransaction: (tx: Omit<Transaction, 'id' | 'createdAt'>) => Promise<void>
+  loadTransactions: () => Promise<void>
+  loadSnapshots: () => Promise<void>
+  addSnapshot: (snapshot: PortfolioSnapshot) => Promise<void>
 }
 
 export const usePortfolioStore = create<PortfolioState>((set) => ({
   holdings: [],
   transactions: [],
+  snapshots: [],
   loading: false,
 
   loadHoldings: async () => {
@@ -69,5 +74,20 @@ export const usePortfolioStore = create<PortfolioState>((set) => ({
     const tx: Transaction = { ...data, id: generateId(), createdAt: new Date().toISOString() }
     await db.transactions.add(tx)
     set(state => ({ transactions: [...state.transactions, tx] }))
+  },
+
+  loadTransactions: async () => {
+    const transactions = await db.transactions.orderBy('date').reverse().toArray()
+    set({ transactions })
+  },
+
+  loadSnapshots: async () => {
+    const snapshots = await db.snapshots.orderBy('timestamp').reverse().toArray()
+    set({ snapshots })
+  },
+
+  addSnapshot: async (snapshot) => {
+    await db.snapshots.add(snapshot)
+    set(state => ({ snapshots: [snapshot, ...state.snapshots] }))
   },
 }))
