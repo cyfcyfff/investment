@@ -1,13 +1,20 @@
 import type {
   AssetHolding,
-  Category,
   RebalanceConfig,
   RebalancePlan,
   RebalanceTrade,
 } from '../types'
-import { CATEGORIES } from '../types'
+import { Category, CATEGORIES, CATEGORY_LABELS } from '../types'
 import { calculateCategoryWeights, isRebalanceTriggered } from './calcService'
 import { generateId } from '../utils/formatters'
+
+/** 默认推荐标的：当某类别无持仓时，用此标的生成买入建议 */
+const SUGGESTED_TICKERS: Record<Category, { ticker: string; currency: string }> = {
+  [Category.STOCKS]: { ticker: 'QQQ', currency: 'USD' },
+  [Category.LONG_BONDS]: { ticker: 'TLT', currency: 'USD' },
+  [Category.GOLD]: { ticker: 'GLD', currency: 'USD' },
+  [Category.CASH]: { ticker: 'BIL', currency: 'USD' },
+}
 
 /**
  * Get the FX rate for converting a currency to the base currency.
@@ -162,7 +169,13 @@ export function generateRebalancePlan(
       const h = categoryHoldings[i]
       const proportion = holdingValues[i] / categoryTotalValue
       const tradeAmount = sellAmount * proportion
-      const tradeQuantity = tradeAmount / (prices[h.ticker]! * getFxRate(h.currency, baseCurrency, fxRates))
+      const fxRate = getFxRate(h.currency, baseCurrency, fxRates)
+      const tradeQuantity = Math.min(
+        tradeAmount / (prices[h.ticker]! * fxRate),
+        h.quantity, // 不超过实际持仓量
+      )
+
+      const actualAmount = tradeQuantity * prices[h.ticker]! * fxRate
 
       const trade: RebalanceTrade = {
         category: sd.category,
@@ -171,8 +184,8 @@ export function generateRebalancePlan(
         side: 'SELL',
         quantity: tradeQuantity,
         estimatedPrice: prices[h.ticker]!,
-        estimatedAmount: tradeAmount,
-        estimatedFee: tradeAmount * config.feeRate,
+        estimatedAmount: actualAmount,
+        estimatedFee: actualAmount * config.feeRate,
         priority: sellPriority,
       }
       trades.push(trade)
@@ -219,7 +232,36 @@ export function generateRebalancePlan(
     const categoryHoldings = holdings.filter(h => {
       return h.category === bd.category && prices[h.ticker] !== undefined
     })
-    if (categoryHoldings.length === 0) continue
+
+    if (categoryHoldings.length === 0) {
+      // 类别无持仓：使用推荐标的生成新建持仓的买入建议
+      const suggested = SUGGESTED_TICKERS[bd.category]
+      const suggestedPrice = prices[suggested.ticker]
+      if (suggestedPrice === undefined) {
+        warnings.push(`${CATEGORY_LABELS[bd.category]} 无持仓且无法获取推荐标的 ${suggested.ticker} 的价格`)
+        buyPriority++
+        continue
+      }
+
+      const fxRate = getFxRate(suggested.currency, baseCurrency, fxRates)
+      const tradeQuantity = buyAmount / (suggestedPrice * fxRate)
+
+      const trade: RebalanceTrade = {
+        category: bd.category,
+        holdingId: '', // 空字符串标记为"需新建持仓"
+        ticker: suggested.ticker,
+        side: 'BUY',
+        quantity: tradeQuantity,
+        estimatedPrice: suggestedPrice,
+        estimatedAmount: buyAmount,
+        estimatedFee: buyAmount * config.feeRate,
+        priority: buyPriority,
+      }
+      trades.push(trade)
+      warnings.push(`${CATEGORY_LABELS[bd.category]} 无持仓，建议新建 ${suggested.ticker} 仓位`)
+      buyPriority++
+      continue
+    }
 
     // Distribute proportionally by current market value
     const holdingValues = categoryHoldings.map(h => {
@@ -272,11 +314,10 @@ export function generateRebalancePlan(
 
     // Apply SELL trades
     for (const trade of trades) {
-      if (trade.side === 'SELL' && trade.category === cat) {
-        const fxRate = getFxRate(
-          holdings.find(h => h.id === trade.holdingId)?.currency ?? 'USD',
-          baseCurrency, fxRates,
-        )
+      if (trade.side === 'SELL' && trade.category === cat && trade.holdingId) {
+        const h = holdings.find(h => h.id === trade.holdingId)
+        if (!h) continue
+        const fxRate = getFxRate(h.currency, baseCurrency, fxRates)
         postValue -= trade.quantity * trade.estimatedPrice * fxRate
       }
     }
@@ -284,10 +325,9 @@ export function generateRebalancePlan(
     // Apply BUY trades
     for (const trade of trades) {
       if (trade.side === 'BUY' && trade.category === cat) {
-        const fxRate = getFxRate(
-          holdings.find(h => h.id === trade.holdingId)?.currency ?? 'USD',
-          baseCurrency, fxRates,
-        )
+        const h = trade.holdingId ? holdings.find(h => h.id === trade.holdingId) : null
+        const currency = h?.currency ?? SUGGESTED_TICKERS[cat]?.currency ?? baseCurrency
+        const fxRate = getFxRate(currency, baseCurrency, fxRates)
         postValue += trade.quantity * trade.estimatedPrice * fxRate
       }
     }

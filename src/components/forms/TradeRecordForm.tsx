@@ -5,7 +5,7 @@ import { Form, Select, Input, InputNumber, Button, Space } from 'antd'
 import type { RebalanceTrade } from '../../types'
 
 const tradeRecordSchema = z.object({
-  holdingId: z.string().min(1, '请选择标的'),
+  holdingId: z.string(),
   actualQuantity: z.number().positive('数量必须大于 0'),
   actualPrice: z.number().positive('价格必须大于 0'),
   actualFee: z.number().min(0, '费用不能为负'),
@@ -39,7 +39,9 @@ export default function TradeRecordForm({ trades, onSubmit, onCancel }: TradeRec
 
   const tickerOptions = trades.map(t => ({
     value: t.holdingId,
-    label: `${t.ticker} (${t.side === 'SELL' ? '卖出' : '买入'})`,
+    label: t.holdingId
+      ? `${t.ticker} (${t.side === 'SELL' ? '卖出' : '买入'})`
+      : `${t.ticker} (新建 · ${t.side === 'SELL' ? '卖出' : '买入'})`,
   }))
 
   return (

@@ -248,6 +248,39 @@ describe('generateRebalancePlan', () => {
     }
   })
 
+  it('should never sell more quantity than actually held', () => {
+    // Gold heavily overweight: 70% of portfolio, target 25%
+    // GLD: 70 shares * 100 = 7000 USD
+    // Others: 10 shares each * 100 = 3000 USD total
+    // Total = 10000. Gold = 70%, target 25%, delta = -4500
+    const holdings = [
+      makeHolding({ ticker: 'VT', category: Category.STOCKS, quantity: 10 }),
+      makeHolding({ ticker: 'TLT', category: Category.LONG_BONDS, quantity: 10 }),
+      makeHolding({ ticker: 'GLD', category: Category.GOLD, quantity: 70 }),
+      makeHolding({ ticker: 'BIL', category: Category.CASH, quantity: 10 }),
+    ]
+    const prices = { VT: 100, TLT: 100, GLD: 100, BIL: 100 }
+    const fxRates: Record<string, number> = {}
+
+    const plan = generateRebalancePlan(
+      holdings, prices, fxRates, CONSERVATIVE_CONFIG, 'USD',
+    )
+
+    // SELL trades should exist for gold
+    const goldSells = plan.trades.filter(t => t.ticker === 'GLD' && t.side === 'SELL')
+    expect(goldSells.length).toBeGreaterThan(0)
+
+    // Total sell quantity must not exceed holding quantity
+    const totalGoldSellQty = goldSells.reduce((s, t) => s + t.quantity, 0)
+    expect(totalGoldSellQty).toBeLessThanOrEqual(70) // holding quantity
+
+    // Each individual sell quantity must not exceed holding quantity
+    for (const trade of plan.trades.filter(t => t.side === 'SELL')) {
+      const holding = holdings.find(h => h.id === trade.holdingId)
+      expect(trade.quantity).toBeLessThanOrEqual(holding!.quantity)
+    }
+  })
+
   it('should apply FX conversion for non-base currency holdings', () => {
     // One JPY-denominated holding and one USD holding
     // SPY: 10 * 100 USD = 1000 USD
@@ -286,5 +319,49 @@ describe('generateRebalancePlan', () => {
     // Should generate BUY for underweight categories
     const buyTrades = plan.trades.filter(t => t.side === 'BUY')
     expect(buyTrades.length).toBeGreaterThan(0)
+  })
+
+  it('should generate BUY suggestion for category with no holdings', () => {
+    // No GOLD holdings, gold weight = 0%, target 25%
+    // Stocks=33%, bonds=33%, cash=33%
+    const holdings = [
+      makeHolding({ ticker: 'VT', category: Category.STOCKS, quantity: 30 }),
+      makeHolding({ ticker: 'TLT', category: Category.LONG_BONDS, quantity: 30 }),
+      makeHolding({ ticker: 'BIL', category: Category.CASH, quantity: 30 }),
+    ]
+    const prices = { VT: 100, TLT: 100, BIL: 100, GLD: 100 }
+    const fxRates: Record<string, number> = {}
+
+    const plan = generateRebalancePlan(
+      holdings, prices, fxRates, CONSERVATIVE_CONFIG, 'USD',
+    )
+
+    // Should generate a BUY trade for GOLD (new position)
+    const goldBuy = plan.trades.find(t => t.category === Category.GOLD && t.side === 'BUY')
+    expect(goldBuy).toBeDefined()
+    expect(goldBuy!.holdingId).toBe('') // empty holdingId = new position
+    expect(goldBuy!.ticker).toBe('GLD') // suggested ticker
+    expect(goldBuy!.estimatedAmount).toBeGreaterThan(0)
+    expect(goldBuy!.estimatedPrice).toBe(100)
+
+    // Should warn about new position
+    expect(plan.warnings.some(w => w.includes('GLD'))).toBe(true)
+  })
+
+  it('should calculate postWeights correctly for new position trades', () => {
+    const holdings = [
+      makeHolding({ ticker: 'VT', category: Category.STOCKS, quantity: 30 }),
+      makeHolding({ ticker: 'TLT', category: Category.LONG_BONDS, quantity: 30 }),
+      makeHolding({ ticker: 'BIL', category: Category.CASH, quantity: 30 }),
+    ]
+    const prices = { VT: 100, TLT: 100, BIL: 100, GLD: 100 }
+    const fxRates: Record<string, number> = {}
+
+    const plan = generateRebalancePlan(
+      holdings, prices, fxRates, CONSERVATIVE_CONFIG, 'USD',
+    )
+
+    // GOLD post-weight should be > 0 (was 0 before)
+    expect(plan.postWeights[Category.GOLD]).toBeGreaterThan(0)
   })
 })

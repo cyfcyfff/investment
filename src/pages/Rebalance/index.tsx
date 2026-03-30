@@ -19,7 +19,7 @@ import TradeRecordForm from '../../components/forms/TradeRecordForm'
 const { Title } = Typography
 
 export default function Rebalance() {
-  const { holdings, loadHoldings, addTransaction } = usePortfolioStore()
+  const { holdings, loadHoldings, addTransaction, updateHolding, addHolding } = usePortfolioStore()
   const { quotes, fxRates, loading, refreshAll } = useQuoteStore()
   const { appConfig, rebalanceConfig } = useConfigStore()
 
@@ -85,8 +85,31 @@ export default function Rebalance() {
     const trade = plan.trades.find(t => t.holdingId === data.holdingId)
     if (!trade) return
 
+    let targetHoldingId = data.holdingId
+
+    // 空 holdingId 表示需要新建持仓
+    if (!data.holdingId) {
+      await addHolding({
+        ticker: trade.ticker,
+        name: trade.ticker,
+        category: trade.category,
+        currency: 'USD',
+        buyPrice: data.actualPrice,
+        quantity: 0, // 先创建空仓，再通过 addTransaction 增加
+        buyDate: data.date,
+        notes: `再平衡新建: ${trade.ticker}`,
+      })
+      const updatedHoldings = usePortfolioStore.getState().holdings
+      const newHolding = updatedHoldings.find(h => h.ticker === trade.ticker)
+      if (!newHolding) {
+        message.error('创建新持仓失败')
+        return
+      }
+      targetHoldingId = newHolding.id
+    }
+
     await addTransaction({
-      holdingId: data.holdingId,
+      holdingId: targetHoldingId,
       type: trade.side === 'SELL' ? 'REBALANCE_OUT' : 'REBALANCE_IN',
       date: data.date,
       quantity: data.actualQuantity,
@@ -96,7 +119,17 @@ export default function Rebalance() {
       notes: data.notes || `再平衡: ${trade.side === 'SELL' ? '卖出' : '买入'} ${trade.ticker}`,
     })
 
-    await createSnapshot(holdings, prices, fxMap, appConfig.baseCurrency, 'REBALANCE')
+    // 同步更新持仓数量
+    const holding = usePortfolioStore.getState().holdings.find(h => h.id === targetHoldingId)
+    if (holding) {
+      const delta = trade.side === 'SELL' ? -data.actualQuantity : data.actualQuantity
+      const newQuantity = Math.max(0, holding.quantity + delta)
+      await updateHolding(targetHoldingId, { quantity: newQuantity })
+    }
+
+    // 用更新后的持仓创建快照
+    const latestHoldings = usePortfolioStore.getState().holdings
+    await createSnapshot(latestHoldings, prices, fxMap, appConfig.baseCurrency, 'REBALANCE')
 
     setDrawerOpen(false)
     message.success('交易记录已保存')
@@ -168,7 +201,7 @@ export default function Rebalance() {
                 <Table
                   dataSource={plan.trades}
                   columns={columns}
-                  rowKey={(r: RebalanceTrade) => `${r.holdingId}-${r.side}`}
+                  rowKey={(r: RebalanceTrade, i?: number) => r.holdingId ? `${r.holdingId}-${r.side}` : `new-${r.ticker}-${i ?? 0}`}
                   pagination={false}
                   size="middle"
                 />
