@@ -3,7 +3,7 @@ import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import timezone from 'dayjs/plugin/timezone'
 import { db } from '../../db'
-import { Category, type AssetHolding, type PortfolioSnapshot, CATEGORIES } from '../../types'
+import { Category, type AssetHolding } from '../../types'
 import { getTodayKeyBeijing, createSnapshot, ensureDailySnapshot } from '../snapshotService'
 
 dayjs.extend(utc)

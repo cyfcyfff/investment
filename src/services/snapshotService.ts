@@ -4,7 +4,7 @@ import timezone from 'dayjs/plugin/timezone'
 import { db } from '../db'
 import { calculateCategoryWeights, calcMarketValue } from './calcService'
 import { generateId } from '../utils/formatters'
-import type { AssetHolding, PortfolioSnapshot, SnapshotTrigger, Category } from '../types'
+import type { AssetHolding, PortfolioSnapshot, SnapshotTrigger } from '../types'
 
 dayjs.extend(utc)
 dayjs.extend(timezone)
