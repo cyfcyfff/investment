@@ -9,9 +9,6 @@ const CATEGORY_COLORS: Record<Category, string> = {
   [Category.CASH]: '#ff4d4f',
 }
 
-const OVERWEIGHT_COLOR = '#ff4d4f'
-const UNDERWEIGHT_COLOR = '#fa8c16'
-
 interface WeightPieChartProps {
   weights: Record<Category, number>
   config: RebalanceConfig
@@ -26,19 +23,11 @@ interface PieDataItem {
 export default function WeightPieChart({ weights, config }: WeightPieChartProps) {
   const data: PieDataItem[] = CATEGORIES.map((cat) => {
     const weight = weights[cat] ?? 0
-    const band = config.bands
-
-    let fill = CATEGORY_COLORS[cat]
-    if (weight > band.high) {
-      fill = OVERWEIGHT_COLOR
-    } else if (weight < band.low && weight > 0) {
-      fill = UNDERWEIGHT_COLOR
-    }
 
     return {
       name: CATEGORY_LABELS[cat],
       value: Math.round(weight * 10000) / 100,
-      fill,
+      fill: CATEGORY_COLORS[cat],
     }
   }).filter((d) => d.value > 0)
 
@@ -73,9 +62,6 @@ export default function WeightPieChart({ weights, config }: WeightPieChartProps)
           const target = config.targets[cat] ?? 0
           const isOverweight = weight > config.bands.high
           const isUnderweight = weight < config.bands.low && weight > 0
-          let color = CATEGORY_COLORS[cat]
-          if (isOverweight) color = OVERWEIGHT_COLOR
-          if (isUnderweight) color = UNDERWEIGHT_COLOR
 
           return (
             <div key={cat} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -85,11 +71,13 @@ export default function WeightPieChart({ weights, config }: WeightPieChartProps)
                   width: 12,
                   height: 12,
                   borderRadius: 2,
-                  backgroundColor: color,
+                  backgroundColor: CATEGORY_COLORS[cat],
                 }}
               />
               <span style={{ fontSize: 12 }}>
                 {CATEGORY_LABELS[cat]} {Math.round(weight * 100)}% (目标 {Math.round(target * 100)}%)
+                {isOverweight && <span style={{ color: '#ff4d4f' }}> ⚠</span>}
+                {isUnderweight && <span style={{ color: '#fa8c16' }}> ⚠</span>}
               </span>
             </div>
           )

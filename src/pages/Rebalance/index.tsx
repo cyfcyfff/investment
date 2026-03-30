@@ -185,15 +185,13 @@ export default function Rebalance() {
                 )}
               </Card>
 
-              <Card title="汇总" style={{ marginBottom: 16 }}>
-                {plan.warnings.length > 0 && (
-                  <div style={{ marginTop: 16 }}>
-                    {plan.warnings.map((w, i) => (
-                      <Alert key={i} message={w} type="warning" showIcon icon={<ExclamationCircleOutlined />} style={{ marginBottom: 8 }} />
-                    ))}
-                  </div>
-                )}
-              </Card>
+              {plan.warnings.length > 0 && (
+                <div style={{ marginBottom: 16 }}>
+                  {plan.warnings.map((w, i) => (
+                    <Alert key={i} message={w} type="warning" showIcon icon={<ExclamationCircleOutlined />} style={{ marginBottom: 8 }} />
+                  ))}
+                </div>
+              )}
 
               <Divider />
 
