@@ -44,7 +44,6 @@ const holdingSchema = z.object({
   currency: z.string().min(1, '请选择货币'),
   buyPrice: z.number({ message: '请输入买入价格' }).positive('价格必须大于0'),
   quantity: z.number({ message: '请输入数量' }).positive('数量必须大于0'),
-  fee: z.number({ message: '请输入手续费' }).min(0, '手续费不能为负'),
   buyDate: z.string().min(1, '请选择买入日期'),
   notes: z.string().default(''),
 })
@@ -74,7 +73,6 @@ export default function HoldingForm({ initialValues, onSubmit, onCancel, loading
       currency: 'USD',
       buyPrice: 0,
       quantity: 0,
-      fee: 0,
       buyDate: dayjs().format('YYYY-MM-DD'),
       notes: '',
     },
@@ -92,7 +90,6 @@ export default function HoldingForm({ initialValues, onSubmit, onCancel, loading
         currency: initialValues.currency ?? 'USD',
         buyPrice: initialValues.buyPrice ?? 0,
         quantity: initialValues.quantity ?? 0,
-        fee: initialValues.fee ?? 0,
         buyDate: initialValues.buyDate ?? dayjs().format('YYYY-MM-DD'),
         notes: initialValues.notes ?? '',
       })
@@ -256,27 +253,6 @@ export default function HoldingForm({ initialValues, onSubmit, onCancel, loading
               min={0}
               step={1}
               precision={4}
-              style={{ width: '100%' }}
-              onChange={(v) => field.onChange(v ?? 0)}
-            />
-          )}
-        />
-      </Form.Item>
-
-      <Form.Item
-        label="手续费"
-        validateStatus={errors.fee ? 'error' : ''}
-        help={errors.fee?.message}
-      >
-        <Controller
-          name="fee"
-          control={control}
-          render={({ field }) => (
-            <InputNumber
-              {...field}
-              min={0}
-              step={0.01}
-              precision={2}
               style={{ width: '100%' }}
               onChange={(v) => field.onChange(v ?? 0)}
             />

@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import {
-  Typography, Button, Table, Card, Alert, Space, Drawer, Tag, Divider, Statistic, Empty, Spin, message,
+  Typography, Button, Table, Card, Alert, Drawer, Tag, Divider, Empty, Spin, message,
 } from 'antd'
 import { ThunderboltOutlined, CheckCircleOutlined, WarningOutlined, ExclamationCircleOutlined } from '@ant-design/icons'
 import { usePortfolioStore } from '../../stores/portfolioStore'
@@ -186,10 +186,6 @@ export default function Rebalance() {
               </Card>
 
               <Card title="汇总" style={{ marginBottom: 16 }}>
-                <Space size="large">
-                  <Statistic title="预估总费用" value={plan.totalEstimatedFee} formatter={v => formatCurrency(Number(v), appConfig.baseCurrency)} />
-                  <Statistic title="预估滑点" value={plan.totalEstimatedSlippage} formatter={v => formatCurrency(Number(v), appConfig.baseCurrency)} />
-                </Space>
                 {plan.warnings.length > 0 && (
                   <div style={{ marginTop: 16 }}>
                     {plan.warnings.map((w, i) => (

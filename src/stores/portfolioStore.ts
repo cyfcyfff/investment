@@ -9,7 +9,7 @@ interface PortfolioState {
   snapshots: PortfolioSnapshot[]
   loading: boolean
   loadHoldings: () => Promise<void>
-  addHolding: (holding: Omit<AssetHolding, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>
+  addHolding: (holding: Omit<AssetHolding, 'id' | 'createdAt' | 'updatedAt' | 'fee'>) => Promise<void>
   updateHolding: (id: string, updates: Partial<AssetHolding>) => Promise<void>
   deleteHolding: (id: string) => Promise<void>
   addTransaction: (tx: Omit<Transaction, 'id' | 'createdAt'>) => Promise<void>
@@ -34,7 +34,7 @@ export const usePortfolioStore = create<PortfolioState>((set) => ({
   addHolding: async (data) => {
     const now = new Date().toISOString()
     const normalizedTicker = data.ticker.trim().toUpperCase()
-    const holding: AssetHolding = { ...data, ticker: normalizedTicker, id: generateId(), createdAt: now, updatedAt: now }
+    const holding: AssetHolding = { ...data, ticker: normalizedTicker, fee: 0, id: generateId(), createdAt: now, updatedAt: now }
     await db.holdings.add(holding)
     const tx: Transaction = {
       id: generateId(),
@@ -43,8 +43,8 @@ export const usePortfolioStore = create<PortfolioState>((set) => ({
       date: data.buyDate,
       quantity: data.quantity,
       price: data.buyPrice,
-      fee: data.fee,
-      totalAmount: data.quantity * data.buyPrice + data.fee,
+      fee: 0,
+      totalAmount: data.quantity * data.buyPrice,
       notes: `初始买入 ${normalizedTicker}`,
       createdAt: now,
     }
