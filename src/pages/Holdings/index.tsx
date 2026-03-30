@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Table, Button, Drawer, Space, Empty, Popconfirm, message, Tag, Spin, Typography, Alert } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons'
+import { PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined, MergeOutlined } from '@ant-design/icons'
 import { usePortfolioStore } from '../../stores/portfolioStore'
 import { useQuoteStore } from '../../stores/quoteStore'
 import { CATEGORY_LABELS, Category } from '../../types'
@@ -20,13 +20,15 @@ const CATEGORY_COLORS: Record<Category, string> = {
 }
 
 export default function Holdings() {
-  const { holdings, loading, loadHoldings, addHolding, updateHolding, deleteHolding } = usePortfolioStore()
+  const { holdings, loading, loadHoldings, addHolding, updateHolding, deleteHolding, mergeHoldings } = usePortfolioStore()
   const { quotes, refreshAll, loading: quoteLoading, error: quoteError } = useQuoteStore()
   const { appConfig } = useConfigStore()
 
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [editingHolding, setEditingHolding] = useState<AssetHolding | undefined>(undefined)
   const [submitLoading, setSubmitLoading] = useState(false)
+  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([])
+  const [mergeLoading, setMergeLoading] = useState(false)
 
   useEffect(() => {
     loadHoldings()
@@ -93,6 +95,27 @@ export default function Holdings() {
     setDrawerOpen(false)
     setEditingHolding(undefined)
   }, [])
+
+  const canMerge = useMemo(() => {
+    if (selectedRowKeys.length < 2) return false
+    const selected = holdings.filter(h => selectedRowKeys.includes(h.id))
+    const tickers = new Set(selected.map(h => h.ticker))
+    return tickers.size === 1
+  }, [selectedRowKeys, holdings])
+
+  const handleMerge = useCallback(async () => {
+    if (!canMerge) return
+    setMergeLoading(true)
+    try {
+      await mergeHoldings(selectedRowKeys)
+      message.success('持仓合并成功')
+      setSelectedRowKeys([])
+    } catch (e) {
+      message.error(String(e))
+    } finally {
+      setMergeLoading(false)
+    }
+  }, [canMerge, mergeHoldings, selectedRowKeys])
 
   const columns = [
     {
@@ -204,6 +227,22 @@ export default function Holdings() {
           >
             刷新
           </Button>
+          <Popconfirm
+            title="确认合并持仓？"
+            description={`将合并 ${selectedRowKeys.length} 笔持仓，买入价格将按加权平均重新计算`}
+            onConfirm={handleMerge}
+            okText="确认合并"
+            cancelText="取消"
+            disabled={!canMerge}
+          >
+            <Button
+              icon={<MergeOutlined />}
+              disabled={!canMerge}
+              loading={mergeLoading}
+            >
+              合并持仓
+            </Button>
+          </Popconfirm>
           <Button type="primary" icon={<PlusOutlined />} onClick={openAddDrawer}>
             添加持仓
           </Button>
@@ -235,6 +274,11 @@ export default function Holdings() {
             dataSource={holdings}
             pagination={false}
             size="middle"
+            rowSelection={{
+              type: 'checkbox',
+              selectedRowKeys,
+              onChange: (keys) => setSelectedRowKeys(keys as string[]),
+            }}
           />
         )}
       </Spin>

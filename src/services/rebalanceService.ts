@@ -1,5 +1,7 @@
 import type {
   AssetHolding,
+  DistributionConfig,
+  DistributionMode,
   RebalanceConfig,
   RebalancePlan,
   RebalanceTrade,
@@ -7,14 +9,6 @@ import type {
 import { Category, CATEGORIES, CATEGORY_LABELS } from '../types'
 import { calculateCategoryWeights, isRebalanceTriggered } from './calcService'
 import { generateId } from '../utils/formatters'
-
-/** 默认推荐标的：当某类别无持仓时，用此标的生成买入建议 */
-const SUGGESTED_TICKERS: Record<Category, { ticker: string; currency: string }> = {
-  [Category.STOCKS]: { ticker: 'QQQ', currency: 'USD' },
-  [Category.LONG_BONDS]: { ticker: 'TLT', currency: 'USD' },
-  [Category.GOLD]: { ticker: 'GLD', currency: 'USD' },
-  [Category.CASH]: { ticker: 'BIL', currency: 'USD' },
-}
 
 /**
  * Get the FX rate for converting a currency to the base currency.
@@ -70,6 +64,43 @@ function calcCategoryValue(
 }
 
 /**
+ * Calculate per-holding proportions within a category based on distribution mode.
+ *
+ * @returns Array of proportions (sum to 1.0), parallel to categoryHoldings
+ */
+function calcDistributionProportions(
+  categoryHoldings: AssetHolding[],
+  holdingValues: number[],
+  mode: DistributionMode,
+  customRatios?: Record<string, number>,
+): number[] {
+  if (categoryHoldings.length === 0) return []
+  if (categoryHoldings.length === 1) return [1.0]
+
+  switch (mode) {
+    case 'EQUAL':
+      return categoryHoldings.map(() => 1 / categoryHoldings.length)
+
+    case 'CUSTOM': {
+      if (!customRatios) return categoryHoldings.map(() => 1 / categoryHoldings.length)
+      const total = Object.values(customRatios).reduce((s, v) => s + v, 0)
+      if (total === 0) return categoryHoldings.map(() => 1 / categoryHoldings.length)
+      return categoryHoldings.map(h => {
+        const ratio = customRatios[h.id]
+        return ratio !== undefined ? ratio / total : 0
+      })
+    }
+
+    case 'PROPORTIONAL':
+    default: {
+      const categoryTotal = holdingValues.reduce((s, v) => s + v, 0)
+      if (categoryTotal === 0) return categoryHoldings.map(() => 1 / categoryHoldings.length)
+      return holdingValues.map(v => v / categoryTotal)
+    }
+  }
+}
+
+/**
  * Generate a rebalance plan for the portfolio.
  *
  * Algorithm:
@@ -78,7 +109,7 @@ function calcCategoryValue(
  * 3. Calculate deltas (target - current) sorted by |delta| descending
  * 4. SELL overweight categories first (lower priority numbers)
  * 5. BUY underweight categories second (higher priority numbers), budget from sells
- * 6. Within each category, distribute proportionally by market value
+ * 6. Within each category, distribute according to distributionConfig (default: proportional by market value)
  * 7. Compute fees, slippage, post-weights, and warnings
  */
 export function generateRebalancePlan(
@@ -87,6 +118,7 @@ export function generateRebalancePlan(
   fxRates: Record<string, number>,
   config: RebalanceConfig,
   baseCurrency: string,
+  distributionConfig?: DistributionConfig,
 ): RebalancePlan {
   const currentWeights = calculateCategoryWeights(
     holdings, prices, fxRates, baseCurrency,
@@ -147,17 +179,15 @@ export function generateRebalancePlan(
   const buyDeltas = deltas.filter(d => d.delta > 0)
 
   // Step 5: SELL trades first
-  let sellPriority = 1
+  let priority = 1
   for (const sd of sellDeltas) {
     const sellAmount = Math.abs(sd.delta)
 
-    // Get holdings in this category with valid prices
     const categoryHoldings = holdings.filter(h => {
       return h.category === sd.category && prices[h.ticker] !== undefined
     })
     if (categoryHoldings.length === 0) continue
 
-    // Calculate each holding's share of the category
     const holdingValues = categoryHoldings.map(h => {
       const fxRate = getFxRate(h.currency, baseCurrency, fxRates)
       return h.quantity * prices[h.ticker]! * fxRate
@@ -165,14 +195,17 @@ export function generateRebalancePlan(
     const categoryTotalValue = holdingValues.reduce((s, v) => s + v, 0)
     if (categoryTotalValue === 0) continue
 
+    const distMode = distributionConfig?.[sd.category]?.mode ?? 'PROPORTIONAL'
+    const customRatios = distributionConfig?.[sd.category]?.customRatios
+    const proportions = calcDistributionProportions(categoryHoldings, holdingValues, distMode, customRatios)
+
     for (let i = 0; i < categoryHoldings.length; i++) {
       const h = categoryHoldings[i]
-      const proportion = holdingValues[i] / categoryTotalValue
-      const tradeAmount = sellAmount * proportion
+      const tradeAmount = sellAmount * proportions[i]
       const fxRate = getFxRate(h.currency, baseCurrency, fxRates)
       const tradeQuantity = Math.min(
         tradeAmount / (prices[h.ticker]! * fxRate),
-        h.quantity, // 不超过实际持仓量
+        h.quantity,
       )
 
       const actualAmount = tradeQuantity * prices[h.ticker]! * fxRate
@@ -186,7 +219,7 @@ export function generateRebalancePlan(
         estimatedPrice: prices[h.ticker]!,
         estimatedAmount: actualAmount,
         estimatedFee: actualAmount * config.feeRate,
-        priority: sellPriority,
+        priority: priority++,
       }
       trades.push(trade)
 
@@ -196,7 +229,6 @@ export function generateRebalancePlan(
         )
       }
     }
-    sellPriority++
   }
 
   // Calculate total sell proceeds (amount minus fees and slippage)
@@ -224,7 +256,6 @@ export function generateRebalancePlan(
     scaleFactor = buyBudget / totalBuyRequested
   }
 
-  let buyPriority = sellPriority + 10 // Ensure BUY priority > SELL priority
   for (const bd of buyDeltas) {
     const rawAmount = bd.delta * scaleFactor
     const buyAmount = Math.max(0, rawAmount)
@@ -234,36 +265,10 @@ export function generateRebalancePlan(
     })
 
     if (categoryHoldings.length === 0) {
-      // 类别无持仓：使用推荐标的生成新建持仓的买入建议
-      const suggested = SUGGESTED_TICKERS[bd.category]
-      const suggestedPrice = prices[suggested.ticker]
-      if (suggestedPrice === undefined) {
-        warnings.push(`${CATEGORY_LABELS[bd.category]} 无持仓且无法获取推荐标的 ${suggested.ticker} 的价格`)
-        buyPriority++
-        continue
-      }
-
-      const fxRate = getFxRate(suggested.currency, baseCurrency, fxRates)
-      const tradeQuantity = buyAmount / (suggestedPrice * fxRate)
-
-      const trade: RebalanceTrade = {
-        category: bd.category,
-        holdingId: '', // 空字符串标记为"需新建持仓"
-        ticker: suggested.ticker,
-        side: 'BUY',
-        quantity: tradeQuantity,
-        estimatedPrice: suggestedPrice,
-        estimatedAmount: buyAmount,
-        estimatedFee: buyAmount * config.feeRate,
-        priority: buyPriority,
-      }
-      trades.push(trade)
-      warnings.push(`${CATEGORY_LABELS[bd.category]} 无持仓，建议新建 ${suggested.ticker} 仓位`)
-      buyPriority++
+      warnings.push(`${CATEGORY_LABELS[bd.category]} 无持仓，无法生成买入建议，请先手动添加该类别的持仓`)
       continue
     }
 
-    // Distribute proportionally by current market value
     const holdingValues = categoryHoldings.map(h => {
       const fxRate = getFxRate(h.currency, baseCurrency, fxRates)
       return h.quantity * prices[h.ticker]! * fxRate
@@ -271,10 +276,13 @@ export function generateRebalancePlan(
     const categoryTotalValue = holdingValues.reduce((s, v) => s + v, 0)
     if (categoryTotalValue === 0) continue
 
+    const distMode = distributionConfig?.[bd.category]?.mode ?? 'PROPORTIONAL'
+    const customRatios = distributionConfig?.[bd.category]?.customRatios
+    const proportions = calcDistributionProportions(categoryHoldings, holdingValues, distMode, customRatios)
+
     for (let i = 0; i < categoryHoldings.length; i++) {
       const h = categoryHoldings[i]
-      const proportion = holdingValues[i] / categoryTotalValue
-      const tradeAmount = buyAmount * proportion
+      const tradeAmount = buyAmount * proportions[i]
       const tradeQuantity = tradeAmount / (prices[h.ticker]! * getFxRate(h.currency, baseCurrency, fxRates))
 
       const trade: RebalanceTrade = {
@@ -286,7 +294,7 @@ export function generateRebalancePlan(
         estimatedPrice: prices[h.ticker]!,
         estimatedAmount: tradeAmount,
         estimatedFee: tradeAmount * config.feeRate,
-        priority: buyPriority,
+        priority: priority++,
       }
       trades.push(trade)
 
@@ -296,7 +304,6 @@ export function generateRebalancePlan(
         )
       }
     }
-    buyPriority++
   }
 
   // Step 8 & 9: Calculate totals
@@ -324,10 +331,10 @@ export function generateRebalancePlan(
 
     // Apply BUY trades
     for (const trade of trades) {
-      if (trade.side === 'BUY' && trade.category === cat) {
-        const h = trade.holdingId ? holdings.find(h => h.id === trade.holdingId) : null
-        const currency = h?.currency ?? SUGGESTED_TICKERS[cat]?.currency ?? baseCurrency
-        const fxRate = getFxRate(currency, baseCurrency, fxRates)
+      if (trade.side === 'BUY' && trade.category === cat && trade.holdingId) {
+        const h = holdings.find(h => h.id === trade.holdingId)
+        if (!h) continue
+        const fxRate = getFxRate(h.currency, baseCurrency, fxRates)
         postValue += trade.quantity * trade.estimatedPrice * fxRate
       }
     }

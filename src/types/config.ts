@@ -33,6 +33,10 @@ export interface AppConfig {
   priceBasis: PriceBasis
   apiKeys: Record<string, string>
   defaultTickers: Record<Category, string[]>
+  telegramEnabled: boolean
+  telegramBotToken: string
+  telegramChatId: string
+  telegramCheckInterval: number
 }
 
 export const DEFAULT_REBALANCE_CONFIG: RebalanceConfig = {
@@ -62,4 +66,8 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
     GOLD: ['GLD'],
     CASH: ['BIL'],
   },
+  telegramEnabled: false,
+  telegramBotToken: '',
+  telegramChatId: '',
+  telegramCheckInterval: 60,
 }

@@ -12,6 +12,7 @@ interface PortfolioState {
   addHolding: (holding: Omit<AssetHolding, 'id' | 'createdAt' | 'updatedAt' | 'fee'>) => Promise<void>
   updateHolding: (id: string, updates: Partial<AssetHolding>) => Promise<void>
   deleteHolding: (id: string) => Promise<void>
+  mergeHoldings: (ids: string[]) => Promise<void>
   addTransaction: (tx: Omit<Transaction, 'id' | 'createdAt'>) => Promise<void>
   loadTransactions: () => Promise<void>
   loadSnapshots: () => Promise<void>
@@ -68,6 +69,53 @@ export const usePortfolioStore = create<PortfolioState>((set) => ({
       holdings: state.holdings.filter(h => h.id !== id),
       transactions: state.transactions.filter(t => t.holdingId !== id),
     }))
+  },
+
+  mergeHoldings: async (ids) => {
+    const holdings = await db.holdings.where('id').anyOf(ids).toArray()
+    if (holdings.length < 2) throw new Error('至少选择2个持仓')
+
+    const tickers = new Set(holdings.map(h => h.ticker))
+    if (tickers.size > 1) throw new Error('只能合并相同标的的持仓')
+
+    const [primary, ...rest] = holdings
+    const totalQty = rest.reduce((s, h) => s + h.quantity, primary.quantity)
+    const totalCost = rest.reduce((s, h) => s + h.quantity * h.buyPrice, primary.quantity * primary.buyPrice)
+    const avgPrice = totalCost / totalQty
+    const totalFee = rest.reduce((s, h) => s + h.fee, primary.fee)
+    const earliestDate = [...holdings].sort((a, b) => a.buyDate.localeCompare(b.buyDate))[0].buyDate
+    const now = new Date().toISOString()
+
+    await db.holdings.update(primary.id, {
+      quantity: totalQty,
+      buyPrice: avgPrice,
+      fee: totalFee,
+      buyDate: earliestDate,
+      notes: primary.notes ? `${primary.notes}（已合并${rest.length}笔）` : `合并${rest.length}笔`,
+      updatedAt: now,
+    })
+
+    const restIds = rest.map(h => h.id)
+    await db.transactions.where('holdingId').anyOf(restIds).modify({ holdingId: primary.id })
+    await db.holdings.bulkDelete(restIds)
+
+    const mergeTx: Transaction = {
+      id: generateId(),
+      holdingId: primary.id,
+      type: 'REBALANCE_IN',
+      date: earliestDate,
+      quantity: totalQty,
+      price: avgPrice,
+      fee: totalFee,
+      totalAmount: totalCost + totalFee,
+      notes: `合并${rest.length}笔持仓为${primary.ticker}`,
+      createdAt: now,
+    }
+    await db.transactions.add(mergeTx)
+
+    const allHoldings = await db.holdings.toArray()
+    const allTransactions = await db.transactions.toArray()
+    set({ holdings: allHoldings, transactions: allTransactions })
   },
 
   addTransaction: async (data) => {

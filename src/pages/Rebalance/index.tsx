@@ -11,21 +11,23 @@ import { calculateCategoryWeights, isRebalanceTriggered } from '../../services/c
 import { createSnapshot } from '../../services/snapshotService'
 import { formatCurrency } from '../../utils/formatters'
 import { CATEGORY_LABELS, Category } from '../../types'
-import type { RebalancePlan, RebalanceTrade } from '../../types'
+import type { RebalancePlan, RebalanceTrade, DistributionConfig, HoldingWithQuote } from '../../types'
 import type { TradeRecordFormData } from '../../components/forms/TradeRecordForm'
 import WeightComparisonChart from '../../components/charts/WeightComparisonChart'
 import TradeRecordForm from '../../components/forms/TradeRecordForm'
+import DistributionConfigPanel from '../../components/forms/DistributionConfigPanel'
 
 const { Title } = Typography
 
 export default function Rebalance() {
-  const { holdings, loadHoldings, addTransaction, updateHolding, addHolding } = usePortfolioStore()
+  const { holdings, loadHoldings, addTransaction, updateHolding } = usePortfolioStore()
   const { quotes, fxRates, loading, refreshAll } = useQuoteStore()
   const { appConfig, rebalanceConfig } = useConfigStore()
 
   const [plan, setPlan] = useState<RebalancePlan | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [generating, setGenerating] = useState(false)
+  const [distributionConfig, setDistributionConfig] = useState<DistributionConfig>({})
 
   useEffect(() => {
     loadHoldings()
@@ -55,6 +57,48 @@ export default function Rebalance() {
     return m
   }, [fxRates])
 
+  // 按类别分组的持仓（含市值信息）
+  const holdingsByCategory = useMemo(() => {
+    const map = new Map<Category, HoldingWithQuote[]>()
+    for (const holding of holdings) {
+      const price = prices[holding.ticker]
+      if (price === undefined) continue
+      const fxRate = holding.currency === appConfig.baseCurrency
+        ? 1
+        : (fxMap[`${holding.currency}-${appConfig.baseCurrency}`] ?? 1)
+      const marketValue = holding.quantity * price * fxRate
+      const h: HoldingWithQuote = {
+        ...holding,
+        currentPrice: price,
+        marketValue,
+        pnl: (price - holding.buyPrice) * holding.quantity,
+        pnlPercent: holding.buyPrice > 0 ? ((price - holding.buyPrice) / holding.buyPrice) : 0,
+      }
+      const arr = map.get(holding.category) ?? []
+      arr.push(h)
+      map.set(holding.category, arr)
+    }
+    return map
+  }, [holdings, prices, fxMap, appConfig.baseCurrency])
+
+  // 校验自定义比例是否合法
+  const isDistributionValid = useMemo(() => {
+    for (const [cat, hList] of holdingsByCategory) {
+      if (hList.length <= 1) continue
+      const dist = distributionConfig[cat]
+      if (dist?.mode === 'CUSTOM' && dist.customRatios) {
+        const sum = Object.values(dist.customRatios).reduce((s, v) => s + v, 0)
+        if (Math.abs(sum - 100) > 0.1) return false
+      }
+    }
+    return true
+  }, [distributionConfig, holdingsByCategory])
+
+  // 分配方式变化时重置已生成的 plan
+  useEffect(() => {
+    setPlan(null)
+  }, [distributionConfig])
+
   const weights = useMemo(
     () => calculateCategoryWeights(holdings, prices, fxMap, appConfig.baseCurrency),
     [holdings, prices, fxMap, appConfig.baseCurrency],
@@ -68,7 +112,9 @@ export default function Rebalance() {
   const handleGenerate = () => {
     setGenerating(true)
     try {
-      const newPlan = generateRebalancePlan(holdings, prices, fxMap, rebalanceConfig, appConfig.baseCurrency)
+      const newPlan = generateRebalancePlan(
+        holdings, prices, fxMap, rebalanceConfig, appConfig.baseCurrency, distributionConfig,
+      )
       setPlan(newPlan)
       if (newPlan.trades.length === 0) {
         message.info('当前无需再平衡操作')
@@ -80,59 +126,40 @@ export default function Rebalance() {
     }
   }
 
-  const handleRecordTrade = async (data: TradeRecordFormData) => {
+  const handleBatchRecord = async (data: TradeRecordFormData) => {
     if (!plan) return
-    const trade = plan.trades.find(t => t.holdingId === data.holdingId)
-    if (!trade) return
 
-    let targetHoldingId = data.holdingId
+    // 批量创建交易记录并更新持仓
+    for (const item of data.items) {
+      const trade = plan.trades.find(t => t.holdingId === item.holdingId)
+      if (!trade) continue
 
-    // 空 holdingId 表示需要新建持仓
-    if (!data.holdingId) {
-      await addHolding({
-        ticker: trade.ticker,
-        name: trade.ticker,
-        category: trade.category,
-        currency: 'USD',
-        buyPrice: data.actualPrice,
-        quantity: 0, // 先创建空仓，再通过 addTransaction 增加
-        buyDate: data.date,
-        notes: `再平衡新建: ${trade.ticker}`,
+      await addTransaction({
+        holdingId: item.holdingId,
+        type: trade.side === 'SELL' ? 'REBALANCE_OUT' : 'REBALANCE_IN',
+        date: data.date,
+        quantity: item.actualQuantity,
+        price: item.actualPrice,
+        fee: item.actualFee,
+        totalAmount: item.actualQuantity * item.actualPrice + item.actualFee,
+        notes: data.notes || `再平衡: ${trade.side === 'SELL' ? '卖出' : '买入'} ${trade.ticker}`,
       })
-      const updatedHoldings = usePortfolioStore.getState().holdings
-      const newHolding = updatedHoldings.find(h => h.ticker === trade.ticker)
-      if (!newHolding) {
-        message.error('创建新持仓失败')
-        return
+
+      const holding = usePortfolioStore.getState().holdings.find(h => h.id === item.holdingId)
+      if (holding) {
+        const delta = trade.side === 'SELL' ? -item.actualQuantity : item.actualQuantity
+        const newQuantity = Math.max(0, holding.quantity + delta)
+        await updateHolding(item.holdingId, { quantity: newQuantity })
       }
-      targetHoldingId = newHolding.id
     }
 
-    await addTransaction({
-      holdingId: targetHoldingId,
-      type: trade.side === 'SELL' ? 'REBALANCE_OUT' : 'REBALANCE_IN',
-      date: data.date,
-      quantity: data.actualQuantity,
-      price: data.actualPrice,
-      fee: data.actualFee,
-      totalAmount: data.actualQuantity * data.actualPrice + data.actualFee,
-      notes: data.notes || `再平衡: ${trade.side === 'SELL' ? '卖出' : '买入'} ${trade.ticker}`,
-    })
-
-    // 同步更新持仓数量
-    const holding = usePortfolioStore.getState().holdings.find(h => h.id === targetHoldingId)
-    if (holding) {
-      const delta = trade.side === 'SELL' ? -data.actualQuantity : data.actualQuantity
-      const newQuantity = Math.max(0, holding.quantity + delta)
-      await updateHolding(targetHoldingId, { quantity: newQuantity })
-    }
-
-    // 用更新后的持仓创建快照
+    // 所有持仓更新完成后创建一次快照
     const latestHoldings = usePortfolioStore.getState().holdings
     await createSnapshot(latestHoldings, prices, fxMap, appConfig.baseCurrency, 'REBALANCE')
 
     setDrawerOpen(false)
-    message.success('交易记录已保存')
+    setPlan(null)
+    message.success(`已批量记录 ${data.items.length} 笔交易`)
   }
 
   const columns = [
@@ -187,7 +214,23 @@ export default function Rebalance() {
         )}
       </Card>
 
-      <Button type="primary" icon={<ThunderboltOutlined />} onClick={handleGenerate} loading={generating} size="large" style={{ marginBottom: 24 }}>
+      <Card title="分配方式" style={{ marginBottom: 16 }}>
+        <DistributionConfigPanel
+          holdingsByCategory={holdingsByCategory}
+          value={distributionConfig}
+          onChange={setDistributionConfig}
+        />
+      </Card>
+
+      <Button
+        type="primary"
+        icon={<ThunderboltOutlined />}
+        onClick={handleGenerate}
+        loading={generating}
+        disabled={!isDistributionValid}
+        size="large"
+        style={{ marginBottom: 24 }}
+      >
         生成再平衡建议
       </Button>
 
@@ -201,7 +244,7 @@ export default function Rebalance() {
                 <Table
                   dataSource={plan.trades}
                   columns={columns}
-                  rowKey={(r: RebalanceTrade, i?: number) => r.holdingId ? `${r.holdingId}-${r.side}` : `new-${r.ticker}-${i ?? 0}`}
+                  rowKey={(r: RebalanceTrade) => `${r.holdingId}-${r.side}`}
                   pagination={false}
                   size="middle"
                 />
@@ -234,7 +277,7 @@ export default function Rebalance() {
                 type="warning" showIcon style={{ marginBottom: 16 }}
               />
 
-              <Button type="primary" onClick={() => setDrawerOpen(true)}>记录执行结果</Button>
+              <Button type="primary" onClick={() => setDrawerOpen(true)}>确认再平衡</Button>
             </>
           )}
         </>
@@ -242,7 +285,7 @@ export default function Rebalance() {
 
       <Drawer title="记录再平衡交易" width={500} open={drawerOpen} onClose={() => setDrawerOpen(false)} destroyOnClose>
         {plan && plan.trades.length > 0 && (
-          <TradeRecordForm trades={plan.trades} onSubmit={handleRecordTrade} onCancel={() => setDrawerOpen(false)} />
+          <TradeRecordForm trades={plan.trades} onSubmit={handleBatchRecord} onCancel={() => setDrawerOpen(false)} />
         )}
       </Drawer>
     </div>

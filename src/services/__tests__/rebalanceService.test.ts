@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { generateRebalancePlan } from '../rebalanceService'
-import type { AssetHolding, RebalanceConfig } from '../../types'
+import type { AssetHolding, RebalanceConfig, DistributionConfig } from '../../types'
 import { Category, DEFAULT_REBALANCE_CONFIG } from '../../types'
 
 function makeHolding(overrides: Partial<AssetHolding> & { ticker: string }): AssetHolding {
@@ -321,47 +321,126 @@ describe('generateRebalancePlan', () => {
     expect(buyTrades.length).toBeGreaterThan(0)
   })
 
-  it('should generate BUY suggestion for category with no holdings', () => {
+  it('should warn and skip BUY for category with no holdings', () => {
     // No GOLD holdings, gold weight = 0%, target 25%
-    // Stocks=33%, bonds=33%, cash=33%
     const holdings = [
       makeHolding({ ticker: 'VT', category: Category.STOCKS, quantity: 30 }),
       makeHolding({ ticker: 'TLT', category: Category.LONG_BONDS, quantity: 30 }),
       makeHolding({ ticker: 'BIL', category: Category.CASH, quantity: 30 }),
     ]
-    const prices = { VT: 100, TLT: 100, BIL: 100, GLD: 100 }
+    const prices = { VT: 100, TLT: 100, BIL: 100 }
     const fxRates: Record<string, number> = {}
 
     const plan = generateRebalancePlan(
       holdings, prices, fxRates, CONSERVATIVE_CONFIG, 'USD',
     )
 
-    // Should generate a BUY trade for GOLD (new position)
+    // No BUY trade should be generated for GOLD (no holdings to buy into)
     const goldBuy = plan.trades.find(t => t.category === Category.GOLD && t.side === 'BUY')
-    expect(goldBuy).toBeDefined()
-    expect(goldBuy!.holdingId).toBe('') // empty holdingId = new position
-    expect(goldBuy!.ticker).toBe('GLD') // suggested ticker
-    expect(goldBuy!.estimatedAmount).toBeGreaterThan(0)
-    expect(goldBuy!.estimatedPrice).toBe(100)
+    expect(goldBuy).toBeUndefined()
 
-    // Should warn about new position
-    expect(plan.warnings.some(w => w.includes('GLD'))).toBe(true)
+    // Should warn about missing holdings
+    expect(plan.warnings.some(w => w.includes('无持仓'))).toBe(true)
   })
 
-  it('should calculate postWeights correctly for new position trades', () => {
+  it('should calculate postWeights correctly for existing holdings only', () => {
     const holdings = [
       makeHolding({ ticker: 'VT', category: Category.STOCKS, quantity: 30 }),
       makeHolding({ ticker: 'TLT', category: Category.LONG_BONDS, quantity: 30 }),
       makeHolding({ ticker: 'BIL', category: Category.CASH, quantity: 30 }),
     ]
-    const prices = { VT: 100, TLT: 100, BIL: 100, GLD: 100 }
+    const prices = { VT: 100, TLT: 100, BIL: 100 }
     const fxRates: Record<string, number> = {}
 
     const plan = generateRebalancePlan(
       holdings, prices, fxRates, CONSERVATIVE_CONFIG, 'USD',
     )
 
-    // GOLD post-weight should be > 0 (was 0 before)
-    expect(plan.postWeights[Category.GOLD]).toBeGreaterThan(0)
+    // GOLD has no holdings, so post-weight should remain 0
+    expect(plan.postWeights[Category.GOLD]).toBe(0)
+
+    // Existing categories should have valid post-weights
+    const totalPostWeight = Object.values(plan.postWeights).reduce((s, v) => s + v, 0)
+    expect(totalPostWeight).toBeCloseTo(1, 6)
+  })
+
+  it('should distribute equally within category when mode is EQUAL', () => {
+    // VT=35 shares ($3500), VTV=20 shares ($2000) in STOCKS — different market values
+    // Total: stocks=$5500, others=$3000, total=$8500. Stocks=64.7% overweight.
+    // Need to sell ~$3375. EQUAL → $1687.5 each. Neither hits holding cap.
+    const holdings = [
+      makeHolding({ ticker: 'VT', category: Category.STOCKS, quantity: 35 }),
+      makeHolding({ ticker: 'VTV', category: Category.STOCKS, quantity: 20 }),
+      makeHolding({ ticker: 'TLT', category: Category.LONG_BONDS, quantity: 10 }),
+      makeHolding({ ticker: 'GLD', category: Category.GOLD, quantity: 10 }),
+      makeHolding({ ticker: 'BIL', category: Category.CASH, quantity: 10 }),
+    ]
+    const prices = { VT: 100, VTV: 100, TLT: 100, GLD: 100, BIL: 100 }
+    const fxRates: Record<string, number> = {}
+    const distConfig: DistributionConfig = {
+      [Category.STOCKS]: { mode: 'EQUAL' },
+    }
+
+    const plan = generateRebalancePlan(
+      holdings, prices, fxRates, CONSERVATIVE_CONFIG, 'USD', distConfig,
+    )
+
+    const vtSell = plan.trades.find(t => t.ticker === 'VT' && t.side === 'SELL')
+    const vtvSell = plan.trades.find(t => t.ticker === 'VTV' && t.side === 'SELL')
+
+    if (vtSell && vtvSell) {
+      expect(vtSell.estimatedAmount).toBeCloseTo(vtvSell.estimatedAmount, 2)
+    }
+  })
+
+  it('should distribute by custom ratios when mode is CUSTOM', () => {
+    const holdings = [
+      makeHolding({ ticker: 'VT', category: Category.STOCKS, quantity: 30 }),
+      makeHolding({ ticker: 'VTV', category: Category.STOCKS, quantity: 30 }),
+      makeHolding({ ticker: 'TLT', category: Category.LONG_BONDS, quantity: 20 }),
+      makeHolding({ ticker: 'GLD', category: Category.GOLD, quantity: 10 }),
+      makeHolding({ ticker: 'BIL', category: Category.CASH, quantity: 10 }),
+    ]
+    const prices = { VT: 100, VTV: 100, TLT: 100, GLD: 100, BIL: 100 }
+    const fxRates: Record<string, number> = {}
+    const distConfig: DistributionConfig = {
+      [Category.STOCKS]: {
+        mode: 'CUSTOM',
+        customRatios: { 'h-VT': 75, 'h-VTV': 25 },
+      },
+    }
+
+    const plan = generateRebalancePlan(
+      holdings, prices, fxRates, CONSERVATIVE_CONFIG, 'USD', distConfig,
+    )
+
+    const vtSell = plan.trades.find(t => t.ticker === 'VT' && t.side === 'SELL')
+    const vtvSell = plan.trades.find(t => t.ticker === 'VTV' && t.side === 'SELL')
+
+    if (vtSell && vtvSell) {
+      expect(vtSell.estimatedAmount / vtvSell.estimatedAmount).toBeCloseTo(3, 1)
+    }
+  })
+
+  it('should default to PROPORTIONAL when no distribution config is provided', () => {
+    const holdings = [
+      makeHolding({ ticker: 'VT', category: Category.STOCKS, quantity: 30 }),
+      makeHolding({ ticker: 'VTV', category: Category.STOCKS, quantity: 30 }),
+      makeHolding({ ticker: 'TLT', category: Category.LONG_BONDS, quantity: 10 }),
+      makeHolding({ ticker: 'GLD', category: Category.GOLD, quantity: 10 }),
+      makeHolding({ ticker: 'BIL', category: Category.CASH, quantity: 10 }),
+    ]
+    const prices = { VT: 100, VTV: 100, TLT: 100, GLD: 100, BIL: 100 }
+    const fxRates: Record<string, number> = {}
+
+    const plan = generateRebalancePlan(
+      holdings, prices, fxRates, CONSERVATIVE_CONFIG, 'USD',
+    )
+
+    const vtSell = plan.trades.find(t => t.ticker === 'VT' && t.side === 'SELL')
+    const vtvSell = plan.trades.find(t => t.ticker === 'VTV' && t.side === 'SELL')
+    if (vtSell && vtvSell) {
+      expect(vtSell.estimatedAmount).toBeCloseTo(vtvSell.estimatedAmount, 2)
+    }
   })
 })

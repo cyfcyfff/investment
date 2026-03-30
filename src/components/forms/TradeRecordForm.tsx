@@ -1,19 +1,21 @@
-import { useForm, Controller } from 'react-hook-form'
-import { zodResolver } from '@hookform/resolvers/zod'
-import { z } from 'zod'
-import { Form, Select, Input, InputNumber, Button, Space } from 'antd'
+import { useState } from 'react'
+import { InputNumber, Button, Typography, Space } from 'antd'
 import type { RebalanceTrade } from '../../types'
 
-const tradeRecordSchema = z.object({
-  holdingId: z.string(),
-  actualQuantity: z.number().positive('数量必须大于 0'),
-  actualPrice: z.number().positive('价格必须大于 0'),
-  actualFee: z.number().min(0, '费用不能为负'),
-  date: z.string().min(1, '请选择日期'),
-  notes: z.string(),
-})
+const { Text } = Typography
 
-export type TradeRecordFormData = z.infer<typeof tradeRecordSchema>
+export interface TradeRecordItem {
+  holdingId: string
+  actualQuantity: number
+  actualPrice: number
+  actualFee: number
+}
+
+export interface TradeRecordFormData {
+  items: TradeRecordItem[]
+  date: string
+  notes: string
+}
 
 interface TradeRecordFormProps {
   trades: RebalanceTrade[]
@@ -22,104 +24,114 @@ interface TradeRecordFormProps {
 }
 
 export default function TradeRecordForm({ trades, onSubmit, onCancel }: TradeRecordFormProps) {
-  const { control, handleSubmit, watch } = useForm<TradeRecordFormData>({
-    resolver: zodResolver(tradeRecordSchema) as any,
-    defaultValues: {
-      holdingId: trades.length > 0 ? trades[0].holdingId : '',
-      actualQuantity: trades.length > 0 ? trades[0].quantity : 0,
-      actualPrice: trades.length > 0 ? trades[0].estimatedPrice : 0,
-      actualFee: trades.length > 0 ? trades[0].estimatedFee : 0,
-      date: new Date().toISOString().split('T')[0],
-      notes: '',
-    },
-  })
+  const [items, setItems] = useState<TradeRecordItem[]>(
+    trades.map(t => ({
+      holdingId: t.holdingId,
+      actualQuantity: t.quantity,
+      actualPrice: t.estimatedPrice,
+      actualFee: t.estimatedFee,
+    })),
+  )
+  const [date, setDate] = useState(new Date().toISOString().split('T')[0])
+  const [notes, setNotes] = useState('')
 
-  const selectedHoldingId = watch('holdingId')
-  const selectedTrade = trades.find(t => t.holdingId === selectedHoldingId)
+  const updateItem = (index: number, field: keyof Omit<TradeRecordItem, 'holdingId'>, value: number | null) => {
+    setItems(prev => {
+      const updated = [...prev]
+      updated[index] = { ...updated[index], [field]: value ?? 0 }
+      return updated
+    })
+  }
 
-  const tickerOptions = trades.map(t => ({
-    value: t.holdingId,
-    label: t.holdingId
-      ? `${t.ticker} (${t.side === 'SELL' ? '卖出' : '买入'})`
-      : `${t.ticker} (新建 · ${t.side === 'SELL' ? '卖出' : '买入'})`,
-  }))
+  const handleSubmit = () => {
+    onSubmit({ items, date, notes })
+  }
 
   return (
-    <Form layout="vertical" onFinish={handleSubmit(onSubmit)}>
-      <Controller
-        name="holdingId"
-        control={control}
-        render={({ field }) => (
-          <Form.Item label="标的">
-            <Select {...field} options={tickerOptions} />
-          </Form.Item>
-        )}
-      />
-      {selectedTrade && (
-        <div style={{ marginBottom: 16, padding: 12, background: '#f6f6f6', borderRadius: 8 }}>
-          <div>建议方向: {selectedTrade.side === 'SELL' ? '卖出' : '买入'}</div>
-          <div>建议数量: {selectedTrade.quantity}</div>
-          <div>建议金额: {selectedTrade.estimatedAmount.toFixed(2)}</div>
-        </div>
-      )}
-      <Space size="large">
-        <Controller
-          name="actualQuantity"
-          control={control}
-          render={({ field, fieldState: { error } }) => (
-            <Form.Item label="实际数量" validateStatus={error ? 'error' : ''} help={error?.message}>
-              <InputNumber {...field} min={0} step={0.01} precision={4} style={{ width: 140 }} />
-            </Form.Item>
-          )}
-        />
-        <Controller
-          name="actualPrice"
-          control={control}
-          render={({ field, fieldState: { error } }) => (
-            <Form.Item label="实际价格" validateStatus={error ? 'error' : ''} help={error?.message}>
-              <InputNumber {...field} min={0} step={0.01} precision={4} style={{ width: 140 }} />
-            </Form.Item>
-          )}
-        />
-        <Controller
-          name="actualFee"
-          control={control}
-          render={({ field }) => (
-            <Form.Item label="实际费用">
-              <InputNumber {...field} min={0} step={0.01} precision={2} style={{ width: 120 }} />
-            </Form.Item>
-          )}
-        />
-      </Space>
-      <Controller
-        name="date"
-        control={control}
-        render={({ field }) => (
-          <Form.Item label="交易日期">
-            <input
-              type="date"
-              value={field.value}
-              onChange={e => field.onChange(e.target.value)}
-              style={{ padding: '4px 11px', border: '1px solid #d9d9d9', borderRadius: 6 }}
+    <div>
+      {trades.map((trade, index) => (
+        <div key={trade.holdingId} style={{ marginBottom: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+            <Text strong>{trade.ticker}</Text>
+            <Text
+              style={{
+                color: trade.side === 'SELL' ? '#ff4d4f' : '#52c41a',
+                fontSize: 12,
+              }}
+            >
+              {trade.side === 'SELL' ? '卖出' : '买入'}
+            </Text>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              建议: {trade.quantity.toFixed(4)} 股 × {trade.estimatedPrice.toFixed(2)}
+            </Text>
+          </div>
+          <Space size="middle">
+            <InputNumber
+              placeholder="实际数量"
+              min={0}
+              step={0.01}
+              precision={4}
+              value={items[index].actualQuantity}
+              onChange={v => updateItem(index, 'actualQuantity', v)}
+              style={{ width: 120 }}
+              addonBefore="数量"
+              size="small"
             />
-          </Form.Item>
-        )}
-      />
-      <Controller
-        name="notes"
-        control={control}
-        render={({ field }) => (
-          <Form.Item label="备注">
-            <Input.TextArea {...field} rows={2} />
-          </Form.Item>
-        )}
-      />
-      <Form.Item>
-        <Space>
-          <Button type="primary" htmlType="submit">记录交易</Button>
-          <Button onClick={onCancel}>取消</Button>
-        </Space>
-      </Form.Item>
-    </Form>
+            <InputNumber
+              placeholder="实际价格"
+              min={0}
+              step={0.01}
+              precision={4}
+              value={items[index].actualPrice}
+              onChange={v => updateItem(index, 'actualPrice', v)}
+              style={{ width: 120 }}
+              addonBefore="价格"
+              size="small"
+            />
+            <InputNumber
+              placeholder="费用"
+              min={0}
+              step={0.01}
+              precision={2}
+              value={items[index].actualFee}
+              onChange={v => updateItem(index, 'actualFee', v)}
+              style={{ width: 100 }}
+              addonBefore="费用"
+              size="small"
+            />
+          </Space>
+        </div>
+      ))}
+
+      <div style={{ marginTop: 16 }}>
+        <div style={{ marginBottom: 8 }}>
+          <Text>交易日期</Text>
+          <input
+            type="date"
+            value={date}
+            onChange={e => setDate(e.target.value)}
+            style={{ marginLeft: 8, padding: '4px 11px', border: '1px solid #d9d9d9', borderRadius: 6 }}
+          />
+        </div>
+        <div style={{ marginBottom: 16 }}>
+          <Text>备注</Text>
+          <textarea
+            value={notes}
+            onChange={e => setNotes(e.target.value)}
+            rows={2}
+            placeholder="可选"
+            style={{
+              marginLeft: 8, width: '80%', padding: '4px 11px',
+              border: '1px solid #d9d9d9', borderRadius: 6, verticalAlign: 'top',
+            }}
+          />
+        </div>
+      </div>
+
+      <Space>
+        <Button type="primary" onClick={handleSubmit}>一并提交</Button>
+        <Button onClick={onCancel}>取消</Button>
+      </Space>
+    </div>
   )
 }

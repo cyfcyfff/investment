@@ -87,6 +87,16 @@ export interface CategorySummary {
 
 export type RebalanceTriggerReason = 'BAND_BREACH' | 'ANNUAL_REVIEW' | 'MANUAL'
 
+export type DistributionMode = 'EQUAL' | 'PROPORTIONAL' | 'CUSTOM'
+
+export interface CategoryDistribution {
+  mode: DistributionMode
+  /** mode === 'CUSTOM' 时使用，key 为 holdingId，value 为百分比 */
+  customRatios?: Record<string, number>
+}
+
+export type DistributionConfig = Partial<Record<Category, CategoryDistribution>>
+
 export interface RebalanceTrade {
   category: Category
   holdingId: string
@@ -143,4 +153,24 @@ export const EMPTY_PERFORMANCE: PerformanceMetrics = {
   snapshotsCount: 0,
   firstSnapshotDate: '',
   lastSnapshotDate: '',
+}
+
+// File System Access API type declarations
+declare global {
+  interface Window {
+    showSaveFilePicker(options?: {
+      suggestedName?: string
+      types?: Array<{ description: string; accept: Record<string, string[]> }>
+    }): Promise<FileSystemFileHandle[]>
+    showOpenFilePicker(options?: {
+      types?: Array<{ description: string; accept: Record<string, string[]> }>
+    }): Promise<FileSystemFileHandle[]>
+  }
+
+  interface FileSystemFileHandle extends FileSystemHandle {
+    readonly kind: 'file'
+    readonly name: string
+    createWritable(): Promise<WritableStream>
+    getFile(): Promise<File>
+  }
 }

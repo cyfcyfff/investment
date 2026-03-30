@@ -15,7 +15,22 @@ export default function NetValueChart({ snapshots, baseCurrency }: NetValueChart
     (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
   )
 
-  const data = sorted.map(s => ({
+  // 每 3 小时采样一次，保留首尾
+  const sampled: typeof sorted = []
+  const INTERVAL_MS = 3 * 60 * 60 * 1000
+  for (let i = 0; i < sorted.length; i++) {
+    const isFirst = i === 0
+    const isLast = i === sorted.length - 1
+    const prevTs = sampled.length > 0
+      ? new Date(sampled[sampled.length - 1].timestamp).getTime()
+      : 0
+    const curTs = new Date(sorted[i].timestamp).getTime()
+    if (isFirst || isLast || (curTs - prevTs) >= INTERVAL_MS) {
+      sampled.push(sorted[i])
+    }
+  }
+
+  const data = sampled.map(s => ({
     date: new Date(s.timestamp).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' }),
     fullDate: new Date(s.timestamp).toLocaleDateString('zh-CN'),
     总市值: Math.round(s.totalValue * 100) / 100,

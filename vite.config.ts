@@ -37,6 +37,14 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/fxrates/, ''),
       },
+      '/api/sina': {
+        target: 'https://suggest3.sinajs.cn',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/sina/, ''),
+        headers: {
+          'Referer': 'https://finance.sina.com.cn',
+        },
+      },
     },
   },
   test: {

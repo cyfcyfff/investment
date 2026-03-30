@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Form, Input, Select, InputNumber, DatePicker, Space } from 'antd'
 import { Controller, useForm, useWatch, type Resolver } from 'react-hook-form'
 import { z } from 'zod'
@@ -6,6 +6,8 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import dayjs from 'dayjs'
 import { CATEGORY_LABELS, Category, CATEGORIES } from '../../types'
 import type { AssetHolding } from '../../types'
+import { searchTickers, type SearchResult } from '../../services/searchService'
+import { useConfigStore } from '../../stores/configStore'
 
 // 预设资产列表：每个类别下的可选资产
 interface PresetAsset {
@@ -58,6 +60,7 @@ interface HoldingFormProps {
 }
 
 export default function HoldingForm({ initialValues, onSubmit, onCancel, loading }: HoldingFormProps) {
+  const { appConfig } = useConfigStore()
   const {
     control,
     handleSubmit,
@@ -104,18 +107,60 @@ export default function HoldingForm({ initialValues, onSubmit, onCancel, loading
     }
   }, [watchedCategory, initialValues, setValue])
 
-  const handlePresetSelect = (ticker: string) => {
-    const assets = PRESET_ASSETS[watchedCategory]
-    const selected = assets.find(a => a.ticker === ticker)
-    if (selected) {
-      setValue('ticker', selected.ticker)
-      setValue('name', selected.name)
-      setValue('currency', selected.currency)
-    }
-  }
-
   const watchedTicker = useWatch({ control, name: 'ticker' })
   const currentOptions = PRESET_ASSETS[watchedCategory] ?? []
+
+  // --- 搜索功能 ---
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([])
+  const [searchLoading, setSearchLoading] = useState(false)
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined)
+
+  const handleAssetSelect = useCallback((value: string) => {
+    // 先尝试搜索结果
+    const found = searchResults.find(r => r.symbol === value)
+    if (found) {
+      setValue('ticker', found.symbol)
+      setValue('name', found.name)
+      setValue('currency', found.currency)
+      return
+    }
+    // 回退到预设资产
+    const preset = currentOptions.find(a => a.ticker === value)
+    if (preset) {
+      setValue('ticker', preset.ticker)
+      setValue('name', preset.name)
+      setValue('currency', preset.currency)
+    }
+  }, [searchResults, currentOptions, setValue])
+
+  const handleSearch = useCallback((query: string) => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    if (!query.trim()) {
+      setSearchResults([])
+      return
+    }
+    const apiKey = appConfig.apiKeys?.fmp ?? ''
+    setSearchLoading(true)
+    debounceRef.current = setTimeout(async () => {
+      const results = await searchTickers(query, apiKey || undefined)
+      setSearchResults(results)
+      setSearchLoading(false)
+    }, 300)
+  }, [appConfig.apiKeys?.fmp])
+
+  // 合并下拉选项：搜索结果 + 预设资产
+  const dropdownOptions = useMemo(() => {
+    const presetOpt = currentOptions.map(a => ({
+      value: a.ticker,
+      label: `${a.name} (${a.ticker})`,
+    }))
+    if (searchResults.length === 0) return presetOpt
+    const searchOpt = searchResults.map(r => ({
+      value: r.symbol,
+      label: `${r.name} (${r.symbol})${r.exchangeShortName ? ` — ${r.exchangeShortName}` : ''}`,
+    }))
+    return searchOpt
+  }, [currentOptions, searchResults])
 
   const handleFinish = useCallback(() => {
     void handleSubmit(onSubmit)()
@@ -145,23 +190,23 @@ export default function HoldingForm({ initialValues, onSubmit, onCancel, loading
       </Form.Item>
 
       <Form.Item
-        label="选择资产"
-        required
+        label="搜索标的"
+        extra="输入代码或名称搜索（如 AAPL、600900），也可从下拉列表选择预设资产"
       >
         <Select
-          placeholder="请选择预设资产"
+          placeholder="输入代码或名称搜索..."
           allowClear
-          onChange={handlePresetSelect}
-          value={
-            currentOptions.find(a => a.ticker === watchedTicker)
-              ?.ticker ?? undefined
-          }
-          options={currentOptions.map(a => ({
-            value: a.ticker,
-            label: `${a.name} (${a.ticker})`,
-          }))}
           showSearch
-          optionFilterProp="label"
+          filterOption={false}
+          onSearch={handleSearch}
+          onChange={handleAssetSelect}
+          loading={searchLoading}
+          notFoundContent={searchLoading ? '搜索中...' : '未找到结果'}
+          options={dropdownOptions}
+          value={
+            dropdownOptions.find(o => o.value === watchedTicker)
+              ?.value ?? undefined
+          }
         />
       </Form.Item>
 

@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Card,
   Form,
@@ -11,9 +11,23 @@ import {
   Typography,
   Popconfirm,
   Input,
+  Switch,
   message,
 } from 'antd'
-import { UndoOutlined, WarningOutlined, KeyOutlined } from '@ant-design/icons'
+import { UndoOutlined, WarningOutlined, KeyOutlined, SendOutlined, DownloadOutlined, UploadOutlined } from '@ant-design/icons'
+import {
+  sendTelegramNotification,
+  buildTestMessage,
+} from '../../services/notificationService'
+import {
+  exportAllToJson,
+  saveToFile,
+  loadFromFile,
+  importFromData,
+  requestBackupFileHandle,
+  writeToExistingHandle,
+} from '../../services/backupService'
+import { usePortfolioStore } from '../../stores/portfolioStore'
 import { useConfigStore } from '../../stores/configStore'
 import { Category, CATEGORIES, CATEGORY_LABELS, BAND_PRESETS } from '../../types'
 import type { BandPreset } from '../../types'
@@ -32,6 +46,7 @@ const BAND_PRESET_LABELS: Record<BandPreset, string> = {
 export default function Settings() {
   const { rebalanceConfig, appConfig, updateRebalanceConfig, updateAppConfig, resetToDefaults } =
     useConfigStore()
+  const { loadHoldings, loadTransactions, loadSnapshots } = usePortfolioStore()
 
   // Calculate total target weight
   const totalWeight = useMemo(() => {
@@ -138,6 +153,153 @@ export default function Settings() {
     message.success('已恢复默认设置')
   }, [resetToDefaults])
 
+  const [testingTelegram, setTestingTelegram] = useState(false)
+
+  const handleTelegramToggle = useCallback(
+    (checked: boolean) => {
+      updateAppConfig({ telegramEnabled: checked })
+    },
+    [updateAppConfig],
+  )
+
+  const handleTelegramTokenChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      updateAppConfig({ telegramBotToken: e.target.value.trim() })
+    },
+    [updateAppConfig],
+  )
+
+  const handleTelegramChatIdChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      updateAppConfig({ telegramChatId: e.target.value.trim() })
+    },
+    [updateAppConfig],
+  )
+
+  const handleTelegramIntervalChange = useCallback(
+    (value: number | null) => {
+      if (value !== null && value >= 1) {
+        updateAppConfig({ telegramCheckInterval: value })
+      }
+    },
+    [updateAppConfig],
+  )
+
+  const handleTestTelegram = useCallback(async () => {
+    const { telegramBotToken, telegramChatId } = appConfig
+    if (!telegramBotToken || !telegramChatId) {
+      message.warning('请先填写 Bot Token 和 Chat ID')
+      return
+    }
+    setTestingTelegram(true)
+    const ok = await sendTelegramNotification(telegramBotToken, telegramChatId, buildTestMessage())
+    setTestingTelegram(false)
+    if (ok) {
+      message.success('测试通知已发送，请检查 Telegram')
+    } else {
+      message.error('发送失败，请检查 Bot Token 和 Chat ID')
+    }
+  }, [appConfig.telegramBotToken, appConfig.telegramChatId])
+
+  const [backingUp, setBackingUp] = useState(false)
+  const [restoring, setRestoring] = useState(false)
+
+  const handleBackup = useCallback(async () => {
+    setBackingUp(true)
+    try {
+      const data = await exportAllToJson()
+      const ok = await saveToFile(data)
+      if (ok) {
+        message.success('备份成功')
+      } else {
+        message.warning('备份已取消或不支持文件选择，数据已导出为下载')
+      }
+    } catch (e) {
+      message.error('备份失败: ' + String(e))
+    } finally {
+      setBackingUp(false)
+    }
+  }, [])
+
+  const handleRestore = useCallback(async () => {
+    setRestoring(true)
+    try {
+      const data = await loadFromFile()
+      if (!data) {
+        message.warning('未选择文件')
+        return
+      }
+      if (!data.version) {
+        message.error('无效的备份文件')
+        return
+      }
+      await importFromData(data)
+      await loadHoldings()
+      await loadTransactions()
+      await loadSnapshots()
+      // 刷新页面以重新加载配置
+      window.location.reload()
+    } catch (e) {
+      message.error('恢复失败: ' + String(e))
+      setRestoring(false)
+    }
+  }, [loadHoldings, loadTransactions, loadSnapshots])
+
+  // 自动备份：监听 portfolioStore 数据变更
+  const backupHandleRef = useRef<FileSystemFileHandle | null>(null)
+  const [autoBackupEnabled, setAutoBackupEnabled] = useState(false)
+
+  const handleAutoBackupToggle = useCallback(
+    (checked: boolean) => {
+      setAutoBackupEnabled(checked)
+      if (!checked) {
+        backupHandleRef.current = null
+      }
+    },
+    [],
+  )
+
+  useEffect(() => {
+    if (!autoBackupEnabled) return
+
+    let active = true
+
+    const doAutoBackup = async () => {
+      if (!active) return
+      try {
+        const data = await exportAllToJson()
+        const handle = backupHandleRef.current
+        if (handle) {
+          await writeToExistingHandle(handle, data)
+        }
+      } catch {
+        // 静默失败
+      }
+    }
+
+    // 订阅 portfolio store 变更
+    const unsub = usePortfolioStore.subscribe(async (state, prevState) => {
+      const holdingsChanged = state.holdings !== prevState.holdings
+      const txChanged = state.transactions !== prevState.transactions
+      if (holdingsChanged || txChanged) {
+        await doAutoBackup()
+      }
+    })
+
+    // 订阅 config store 变更
+    const unsubConfig = useConfigStore.subscribe(async (state, prevState) => {
+      if (state.appConfig !== prevState.appConfig || state.rebalanceConfig !== prevState.rebalanceConfig) {
+        await doAutoBackup()
+      }
+    })
+
+    return () => {
+      active = false
+      unsub()
+      unsubConfig()
+    }
+  }, [autoBackupEnabled])
+
   return (
     <div>
       <Title level={4} style={{ marginBottom: 16 }}>设置</Title>
@@ -187,6 +349,120 @@ export default function Settings() {
               placeholder="请输入 FMP API Key"
               style={{ maxWidth: 400 }}
             />
+          </Form.Item>
+        </Form>
+      </Card>
+
+      {/* Telegram Notifications */}
+      <Card title="Telegram 通知" style={{ marginBottom: 16 }}>
+        <Form layout="vertical">
+          <Form.Item label="启用通知">
+            <Switch
+              checked={appConfig.telegramEnabled}
+              onChange={handleTelegramToggle}
+            />
+          </Form.Item>
+          <Form.Item
+            label="Bot Token"
+            extra="通过 @BotFather 创建机器人后获取"
+          >
+            <Input.Password
+              value={appConfig.telegramBotToken}
+              onChange={handleTelegramTokenChange}
+              placeholder="123456:ABC-DEF..."
+              style={{ maxWidth: 400 }}
+            />
+          </Form.Item>
+          <Form.Item
+            label="Chat ID"
+            extra="向机器人发送 /start 后，通过 api.telegram.org/bot{token}/getUpdates 获取"
+          >
+            <Input
+              value={appConfig.telegramChatId}
+              onChange={handleTelegramChatIdChange}
+              placeholder="123456789"
+              style={{ maxWidth: 200 }}
+            />
+          </Form.Item>
+          <Form.Item label="检查间隔">
+            <InputNumber
+              value={appConfig.telegramCheckInterval}
+              onChange={handleTelegramIntervalChange}
+              min={1}
+              max={1440}
+              style={{ width: 120 }}
+              addonAfter="分钟"
+            />
+          </Form.Item>
+          <Form.Item>
+            <Button
+              icon={<SendOutlined />}
+              onClick={handleTestTelegram}
+              loading={testingTelegram}
+            >
+              发送测试通知
+            </Button>
+          </Form.Item>
+        </Form>
+      </Card>
+
+      {/* Data Backup */}
+      <Card title="数据备份" style={{ marginBottom: 16 }}>
+        <Form layout="vertical">
+          <Form.Item
+            extra="备份包含持仓、交易记录、快照和所有配置，保存为本地 JSON 文件"
+          >
+            <Space>
+              <Button
+                icon={<DownloadOutlined />}
+                onClick={handleBackup}
+                loading={backingUp}
+              >
+                备份到文件
+              </Button>
+              <Popconfirm
+                title="确认恢复数据？"
+                description="恢复操作将覆盖当前所有数据（持仓、交易记录、快照和配置）。"
+                onConfirm={handleRestore}
+                okText="确认恢复"
+                cancelText="取消"
+              >
+                <Button
+                  icon={<UploadOutlined />}
+                  loading={restoring}
+                  danger
+                >
+                  从文件恢复
+                </Button>
+              </Popconfirm>
+            </Space>
+          </Form.Item>
+          <Form.Item label="自动备份">
+            <Space align="center">
+              <Switch checked={autoBackupEnabled} onChange={handleAutoBackupToggle} />
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {autoBackupEnabled ? '已启用' : '未启用'}
+              </Text>
+              {autoBackupEnabled && (
+                <Button
+                  size="small"
+                  onClick={async () => {
+                    const handle = await requestBackupFileHandle()
+                    if (handle) {
+                      backupHandleRef.current = handle
+                      message.success('已选择备份文件')
+                    }
+                  }}
+                >
+                  选择文件位置
+                </Button>
+              )}
+            </Space>
+            {autoBackupEnabled && (
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                开启后，持仓或配置变更时自动写入备份文件（需先选择文件位置，文件句柄仅在当前浏览器会话内有效）
+              </Text>
+            )}
           </Form.Item>
         </Form>
       </Card>
