@@ -1,9 +1,13 @@
+import type { Market } from '../types'
+import { Market as MarketEnum } from '../types'
+
 export interface SearchResult {
   symbol: string
   name: string
   currency: string
   stockExchange: string
   exchangeShortName: string
+  market: Market
 }
 
 // ─── 新浪财经搜索（主要源）──────────────────────────────────
@@ -36,19 +40,25 @@ async function searchFromSina(query: string, limit = 10): Promise<SearchResult[]
         const fields = item.split(',')
         if (fields.length < 5) return null
         const code = fields[0]!   // sh600900, AAPL, 或中文(英伟达)
-        const market = fields[1]!  // 11=A股, 103=美股, 41=其他
+        const market = fields[1]!  // 11=A股, 103=美股, 203=场内ETF, 22=场内基金, 31=港股
         const symbol = fields[2]!  // 600900, aapl, nvda (实际ticker)
         const nameCN = fields[4]!  // 长江电力, 英伟达
         const nameEN = fields[5] ?? ''
 
-        // 用 code 判断交易所前缀，用 symbol 作为最终代码
-        const normalizedSymbol = normalizeSinaSymbol(code, symbol)
+        // market 203/22 时 code 可能是中文名，fields[3] 含交易所前缀（sh518880, of159934）
+        const rawCode = fields[3] ?? ''
+        const effectiveCode = (rawCode.startsWith('sh') || rawCode.startsWith('sz'))
+          ? rawCode
+          : code
+
+        const normalizedSymbol = normalizeSinaSymbol(effectiveCode, symbol, market)
         return {
           symbol: normalizedSymbol,
           name: nameCN || nameEN || symbol,
           currency: sinaCurrency(market),
-          stockExchange: sinaExchange(code),
+          stockExchange: sinaExchange(effectiveCode),
           exchangeShortName: sinaExchangeShort(market),
+          market: sinaMarket(market, symbol),
         }
       })
       .filter((r): r is SearchResult => r !== null)
@@ -58,12 +68,14 @@ async function searchFromSina(query: string, limit = 10): Promise<SearchResult[]
 }
 
 /** 新浪代码 → 标准代码：code 用于判断交易所，symbol 是实际 ticker */
-function normalizeSinaSymbol(code: string, symbol: string): string {
+function normalizeSinaSymbol(code: string, symbol: string, marketCode: string): string {
   const c = code.toLowerCase()
   const s = symbol.toUpperCase()
   if (c.startsWith('sh')) return `${s}.SS`
   if (c.startsWith('sz')) return `${s}.SZ`
   if (c.startsWith('hk')) return `${s}.HK`
+  // 港股（market=31）：代码是纯数字，需要加 .HK 后缀
+  if (marketCode === '31' && /^\d+$/.test(s)) return `${s}.HK`
   // 美股和其他：直接用 symbol
   return s
 }
@@ -71,7 +83,9 @@ function normalizeSinaSymbol(code: string, symbol: string): string {
 function sinaCurrency(market: string): string {
   switch (market) {
     case '11': return 'CNY'   // A股
+    case '31': return 'HKD'   // 港股
     case '103': return 'USD'  // 美股
+    case '201': return 'CNY'  // 基金
     default: return 'USD'
   }
 }
@@ -84,9 +98,35 @@ function sinaExchange(_code: string): string {
   return 'US'
 }
 
+function sinaMarket(marketCode: string, code: string): Market {
+  switch (marketCode) {
+    case '11': return MarketEnum.CN       // A股（沪深）
+    case '21': return MarketEnum.CN       // 场外基金
+    case '22': return MarketEnum.CN       // 场内基金
+    case '31': return MarketEnum.HK       // 港股
+    case '103': return MarketEnum.US      // 美股
+    case '201': return MarketEnum.CN      // 基金（QDII 等）
+    case '203': return MarketEnum.CN      // 场内 ETF/LOF
+    case '41': {
+      const c = code.toLowerCase()
+      if (c.startsWith('of') || c.startsWith('sh') || c.startsWith('sz')) return MarketEnum.CN
+      if (c.startsWith('hk')) return MarketEnum.HK
+      return MarketEnum.US
+    }
+    default: {
+      const c = code.toLowerCase()
+      if (c.startsWith('sh') || c.startsWith('sz')) return MarketEnum.CN
+      if (c.startsWith('hk')) return MarketEnum.HK
+      if (/^\d{4,5}$/.test(c)) return MarketEnum.HK
+      return MarketEnum.US
+    }
+  }
+}
+
 function sinaExchangeShort(market: string): string {
   switch (market) {
     case '11': return 'A股'
+    case '31': return '港股'
     case '103': return 'US'
     default: return ''
   }
@@ -126,6 +166,7 @@ async function searchFromYahoo(query: string, limit = 10): Promise<SearchResult[
         currency: inferCurrency(q.symbol),
         stockExchange: q.exchange?.trim() ?? '',
         exchangeShortName: q.exchDisp?.trim() ?? '',
+        market: inferMarket(q.symbol),
       }))
   } catch {
     return []
@@ -140,6 +181,15 @@ function inferCurrency(symbol: string): string {
   if (s.endsWith('.DE') || s.endsWith('.PA') || s.endsWith('.L')) return 'EUR'
   if (s.endsWith('.JP') || s.endsWith('.T')) return 'JPY'
   return 'USD'
+}
+
+function inferMarket(symbol: string): Market {
+  const s = symbol.toUpperCase()
+  if (s.endsWith('.SS') || s.endsWith('.SZ')) return MarketEnum.CN
+  if (s.endsWith('.HK')) return MarketEnum.HK
+  // 大宗商品：XAUUSD, XAGUSD 等
+  if (/^X[A-Z]{2}[A-Z]{3}$/.test(s)) return MarketEnum.COMMODITY
+  return MarketEnum.US
 }
 
 // ─── 公开接口 ────────────────────────────────────────────────

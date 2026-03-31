@@ -1,3 +1,19 @@
+export enum Market {
+  US = 'US',
+  CN = 'CN',
+  HK = 'HK',
+  COMMODITY = 'COMMODITY',
+}
+
+export const MARKET_LABELS: Record<Market, string> = {
+  [Market.US]: '美国',
+  [Market.CN]: '中国',
+  [Market.HK]: '香港',
+  [Market.COMMODITY]: '大宗商品',
+}
+
+export const MARKETS: Market[] = [Market.US, Market.CN, Market.HK, Market.COMMODITY]
+
 export enum Category {
   STOCKS = 'STOCKS',
   LONG_BONDS = 'LONG_BONDS',
@@ -25,6 +41,7 @@ export interface AssetHolding {
   ticker: string
   category: Category
   currency: string
+  market?: Market
   buyPrice: number
   quantity: number
   fee: number

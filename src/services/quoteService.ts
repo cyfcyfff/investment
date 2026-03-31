@@ -1,4 +1,5 @@
 import type { Quote } from '../types'
+import { Market } from '../types'
 
 function getTimeoutSignal(timeoutMs: number): AbortSignal | undefined {
   const fn = (AbortSignal as typeof AbortSignal & { timeout?: (ms: number) => AbortSignal }).timeout
@@ -57,20 +58,21 @@ const TENCENT_QUOTE_URL = '/api/tencent/q='
 
 interface YahooMeta {
   regularMarketPrice: number
-  previousClose: number
+  previousClose?: number
+  chartPreviousClose?: number
   currency: string
   regularMarketTime: number
 }
 
 function parseYahooQuote(ticker: string, meta: YahooMeta): Quote {
+  const price = meta.regularMarketPrice
+  const prevClose = meta.previousClose ?? meta.chartPreviousClose ?? 0
   return {
     ticker,
-    price: meta.regularMarketPrice,
+    price,
     currency: meta.currency,
-    change: meta.regularMarketPrice - meta.previousClose,
-    changePercent: meta.previousClose !== 0
-      ? (meta.regularMarketPrice - meta.previousClose) / meta.previousClose
-      : 0,
+    change: prevClose !== 0 ? price - prevClose : 0,
+    changePercent: prevClose !== 0 ? (price - prevClose) / prevClose : 0,
     asOf: new Date(meta.regularMarketTime * 1000).toISOString(),
     source: 'YAHOO',
   }
@@ -87,10 +89,24 @@ async function fetchFromYahoo(ticker: string): Promise<Quote> {
   return parseYahooQuote(ticker, meta)
 }
 
-function normalizeTencentSymbol(ticker: string): string {
+function normalizeTencentSymbol(ticker: string, market?: Market): string {
   const t = ticker.trim().toUpperCase()
   if (t.endsWith('.SS')) return `sh${t.slice(0, -3)}`
   if (t.endsWith('.SZ')) return `sz${t.slice(0, -3)}`
+  if (t.endsWith('.HK')) return `hk${t.slice(0, -3)}`
+  // 纯数字代码（无后缀）：根据 market 或首位判断交易所
+  if (/^\d{4,5}$/.test(t)) {
+    // 港股多为 4-5 位数字
+    if (market === Market.HK) return `hk${t}`
+    // 5 位数字可能是港股
+    return `hk${t}`
+  }
+  if (/^\d{6}$/.test(t)) {
+    if (market === Market.HK) return `hk${t}`
+    if (t.startsWith('6')) return `sh${t}`
+    if (t.startsWith('0') || t.startsWith('3')) return `sz${t}`
+    return `sh${t}`
+  }
   return t.toLowerCase()
 }
 
@@ -105,14 +121,17 @@ function parseTencentAsOf(raw: string): string {
   return new Date(`${y}-${m}-${d}T${hh}:${mm}:${ss}+08:00`).toISOString()
 }
 
-async function fetchFromTencent(ticker: string): Promise<Quote> {
-  const symbol = normalizeTencentSymbol(ticker)
+async function fetchFromTencent(ticker: string, market?: Market): Promise<Quote> {
+  const symbol = normalizeTencentSymbol(ticker, market)
   const url = `${TENCENT_QUOTE_URL}${encodeURIComponent(symbol)}`
   const response = await fetch(url, { signal: getTimeoutSignal(10000) })
   if (!response.ok) {
     throw new Error(`Tencent HTTP ${response.status}`)
   }
-  const text = await response.text()
+  // 腾讯返回 GBK 编码，用 arrayBuffer + TextDecoder 正确解码
+  const buffer = await response.arrayBuffer()
+  const decoder = new TextDecoder('gbk')
+  const text = decoder.decode(buffer)
   const raw = text.trim()
   if (!raw || !raw.includes('~')) throw new Error('Tencent invalid response')
   const payload = raw.replace(/^[^"]*"/, '').replace(/";?$/, '')
@@ -125,7 +144,9 @@ async function fetchFromTencent(ticker: string): Promise<Quote> {
   return {
     ticker,
     price,
-    currency: ticker.endsWith('.SS') || ticker.endsWith('.SZ') ? 'CNY' : 'USD',
+    currency: ticker.endsWith('.SS') || ticker.endsWith('.SZ') ? 'CNY'
+      : ticker.endsWith('.HK') ? 'HKD'
+      : 'USD',
     change: Number.isFinite(previousClose) ? price - previousClose : 0,
     changePercent: previousClose > 0 ? (price - previousClose) / previousClose : 0,
     asOf,
@@ -138,6 +159,8 @@ function toStooqSymbol(ticker: string): string {
   if (t === 'XAUUSD' || t === 'XAGUSD') return t
   if (t.endsWith('.SS')) return `${t.slice(0, -3)}.CN`
   if (t.endsWith('.SZ')) return `${t.slice(0, -3)}.CN`
+  // 纯数字 A 股代码（无后缀）
+  if (/^\d{6}$/.test(t)) return `${t}.CN`
   return `${t}.US`
 }
 
@@ -189,24 +212,46 @@ async function fetchFromStooq(ticker: string): Promise<Quote> {
   return parseStooqQuote(ticker, text)
 }
 
-async function fetchFromPublicSources(ticker: string): Promise<Quote> {
-  if (ticker.endsWith('.SS') || ticker.endsWith('.SZ')) {
-    try {
-      return await fetchFromTencent(ticker)
-    } catch {
-      return fetchFromStooq(ticker)
+async function fetchFromPublicSources(ticker: string, market?: Market): Promise<Quote> {
+  // 有 market 信息时优先按 market 选源
+  if (market === Market.CN) {
+    try { return await fetchFromTencent(ticker, market) }
+    catch { return fetchFromStooq(ticker) }
+  }
+  if (market === Market.HK) {
+    try { return await fetchFromTencent(ticker, market) }
+    catch {
+      try { return await fetchFromYahoo(ticker) }
+      catch { return fetchFromStooq(ticker) }
     }
   }
-  try {
-    return await fetchFromYahoo(ticker)
-  } catch {
-    return fetchFromStooq(ticker)
+  if (market === Market.US) {
+    try { return await fetchFromYahoo(ticker) }
+    catch { return fetchFromStooq(ticker) }
   }
+  if (market === Market.COMMODITY) {
+    try { return await fetchFromYahoo(ticker) }
+    catch { return fetchFromStooq(ticker) }
+  }
+  // 无 market 信息时按 ticker 后缀推断（向后兼容）
+  if (ticker.endsWith('.SS') || ticker.endsWith('.SZ')) {
+    try { return await fetchFromTencent(ticker, Market.CN) }
+    catch { return fetchFromStooq(ticker) }
+  }
+  if (ticker.endsWith('.HK')) {
+    try { return await fetchFromTencent(ticker, Market.HK) }
+    catch {
+      try { return await fetchFromYahoo(ticker) }
+      catch { return fetchFromStooq(ticker) }
+    }
+  }
+  try { return await fetchFromYahoo(ticker) }
+  catch { return fetchFromStooq(ticker) }
 }
 
 // ─── 公开接口：双源自动回退 ───────────────────────────────
 
-export async function fetchQuote(ticker: string, apiKey: string): Promise<Quote> {
+export async function fetchQuote(ticker: string, apiKey: string, market?: Market): Promise<Quote> {
   const t = ticker.trim().toUpperCase()
 
   // 1) 有 API Key 时先尝试 FMP
@@ -215,15 +260,15 @@ export async function fetchQuote(ticker: string, apiKey: string): Promise<Quote>
       const results = await fetchFromFmp(t, apiKey.trim())
       if (results.length > 0) return results[0]
     } catch {
-      // FMP 失败，回退到 Yahoo
+      // FMP 失败，回退到公共源
     }
   }
 
-  // 2) 回退到 Yahoo Finance
-  return fetchFromPublicSources(t)
+  // 2) 按 market 选最优源
+  return fetchFromPublicSources(t, market)
 }
 
-export async function fetchQuotes(tickers: string[], apiKey: string): Promise<Quote[]> {
+export async function fetchQuotes(tickers: string[], apiKey: string, markets?: Record<string, Market>): Promise<Quote[]> {
   const normalizedTickers = [...new Set(tickers.map(t => t.trim().toUpperCase()).filter(Boolean))]
   if (normalizedTickers.length === 0) return []
 
@@ -244,22 +289,22 @@ export async function fetchQuotes(tickers: string[], apiKey: string): Promise<Qu
     }
   }
 
-  // 2) 确定需要回退到 Yahoo 的 tickers
-  const yahooTickers = hasKey
+  // 2) 确定需要回退到公共源的 tickers
+  const fallbackTickers = hasKey
     ? normalizedTickers.filter(t => !fmpSuccesses.has(t))
     : normalizedTickers
 
-  // 3) 对 FMP 未覆盖的逐个通过 Yahoo 获取
-  const yahooResults = await Promise.allSettled(
-    yahooTickers.map(t => fetchFromPublicSources(t)),
+  // 3) 对 FMP 未覆盖的逐个按 market 选源获取
+  const fallbackResults = await Promise.allSettled(
+    fallbackTickers.map(t => fetchFromPublicSources(t, markets?.[t])),
   )
-  const yahooQuotes: Quote[] = []
-  for (let i = 0; i < yahooResults.length; i++) {
-    const result = yahooResults[i]
+  const fallbackQuotes: Quote[] = []
+  for (let i = 0; i < fallbackResults.length; i++) {
+    const result = fallbackResults[i]
     if (result.status === 'fulfilled') {
-      yahooQuotes.push(result.value)
+      fallbackQuotes.push(result.value)
     } else {
-      console.warn(`Failed to fetch quote for ${yahooTickers[i]}:`, result.reason)
+      console.warn(`Failed to fetch quote for ${fallbackTickers[i]}:`, result.reason)
     }
   }
 
@@ -271,13 +316,13 @@ export async function fetchQuotes(tickers: string[], apiKey: string): Promise<Qu
     for (let i = 0; i < retryResults.length; i++) {
       const result = retryResults[i]
       if (result.status === 'fulfilled' && result.value) {
-        // 去重：如果 Yahoo 已经获取了就跳过
-        if (!yahooQuotes.some(q => q.ticker === result.value!.ticker)) {
-          yahooQuotes.push(result.value)
+        // 去重：如果公共源已经获取了就跳过
+        if (!fallbackQuotes.some(q => q.ticker === result.value!.ticker)) {
+          fallbackQuotes.push(result.value)
         }
       }
     }
   }
 
-  return [...fmpQuotes, ...yahooQuotes]
+  return [...fmpQuotes, ...fallbackQuotes]
 }

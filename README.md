@@ -18,10 +18,23 @@
 
 | 类别 | 默认标的 | 说明 |
 |------|---------|------|
-| 股票 (STOCKS) | VT / QQQ / SPY | 追求增长 |
-| 长期国债 (LONG_BONDS) | TLT / EDV / IGOV | 经济衰退对冲 |
-| 黄金 (GOLD) | GLD / XAUUSD | 通胀对冲 |
+| 股票 (STOCKS) | QQQ / VOO / 510300.SS | 追求增长 |
+| 长期国债 (LONG_BONDS) | TLT / EDV | 经济衰退对冲 |
+| 黄金 (GOLD) | XAUUSD / GLD / 518880.SS | 通胀对冲 |
 | 现金/短债 (CASH) | BIL | 通缩/流动性对冲 |
+
+### 多市场支持
+
+支持中国、香港、美国三个市场的标的，每个市场使用最优数据源：
+
+| 市场 | 数据源 | 说明 |
+|------|--------|------|
+| 中国 | 腾讯财经 → Stooq | A 股、场内 ETF/基金 |
+| 香港 | 腾讯财经 → Yahoo → Stooq | 港股 |
+| 美国 | Yahoo Finance → Stooq | 美股 |
+| 大宗商品 | Yahoo Finance → Stooq | 现货黄金等（通过预设添加） |
+
+搜索支持中文关键词和股票代码，通过新浪财经 API 提供中英文模糊搜索（如输入"长江电力"、"AAPL"、"黄金ETF"均可）。
 
 ## 技术栈
 
@@ -50,31 +63,25 @@ npm run test
 
 ## API 配置
 
-应用使用多个行情数据源，通过 Vite 代理转发请求。**无需配置任何 API Key 即可使用基础功能**（行情数据会通过公开源获取）。
-
-配置 FMP API Key 可获得更稳定的行情数据。
-
-### FMP API Key（可选）
-
-1. 访问 [Financial Modeling Prep](https://financialmodelingprep.com/developer/docs) 注册账号
-2. 在 [API Keys](https://site.financialmodelingprep.com/developer/docs#api-key) 页面获取免费 API Key
-3. 在应用的 **设置 → API 密钥** 中填入 Key
-
-> 免费版有调用频率限制，建议仅用于个人少量持仓的行情获取。
+应用使用多个行情数据源，通过 Vite 代理转发请求。**无需配置任何 API Key 即可使用全部功能**（行情数据通过公开源获取）。
 
 ### 行情数据源优先级
 
 应用按以下优先级获取行情数据，任一源失败会自动切换到下一源：
 
 ```
-FMP API（需 API Key）→ Yahoo Finance → 腾讯财经（A 股）→ Stooq
+FMP API（需 API Key）→ 按市场选最优源（中国→腾讯，香港/美国→Yahoo）→ Stooq 兜底
 ```
 
-### 标的搜索
+### FMP API Key（可选）
 
-- 搜索使用新浪财经 API，支持中文关键词和股票代码
-- 无需额外配置，开箱即用
-- 示例：输入 `600900` 搜索长江电力，输入 `AAPL` 搜索苹果，输入 `英伟达` 搜索 NVIDIA
+配置后作为第一优先级数据源，可获得更稳定的行情数据。
+
+1. 访问 [Financial Modeling Prep](https://financialmodelingprep.com/developer/docs) 注册账号
+2. 在 [API Keys](https://site.financialmodelingprep.com/developer/docs#api-key) 页面获取免费 API Key
+3. 在应用的 **设置 → API 密钥** 中填入 Key
+
+> 免费版有调用频率限制，建议仅用于个人少量持仓的行情获取。
 
 ## Telegram 通知配置
 
@@ -128,13 +135,6 @@ FMP API（需 API Key）→ Yahoo Finance → 腾讯财经（A 股）→ Stooq
 5. 设置 **检查间隔**（分钟），默认 60 分钟
 6. 点击 **发送测试通知** 验证配置是否正确
 
-### 通知逻辑
-
-- 应用启动后延迟 5 秒进行首次检查
-- 之后每隔设定的检查间隔自动检查
-- 当任一类资产的权重超出设定的带宽上下限时，发送通知
-- 同一偏离状态在检查间隔内不会重复通知
-
 ## 数据备份
 
 应用数据存储在浏览器的 IndexedDB 和 localStorage 中。建议定期备份。
@@ -172,8 +172,8 @@ src/
 ├── services/
 │   ├── calcService.ts   # 组合计算
 │   ├── fxService.ts     # 汇率服务
-│   ├── quoteService.ts  # 行情服务（多源回退）
-│   ├── searchService.ts # 标的搜索（新浪财经）
+│   ├── quoteService.ts  # 行情服务（多源回退，按市场选源）
+│   ├── searchService.ts # 标的搜索（新浪财经，支持中英文）
 │   ├── rebalanceService.ts  # 再平衡引擎
 │   ├── notificationService.ts # Telegram 通知
 │   ├── backupService.ts # 数据备份

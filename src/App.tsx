@@ -11,6 +11,7 @@ import Settings from './pages/Settings'
 import { usePortfolioStore } from './stores/portfolioStore'
 import { useQuoteStore } from './stores/quoteStore'
 import { useConfigStore } from './stores/configStore'
+import type { Market } from './types'
 import { calculateCategoryWeights, isRebalanceTriggered } from './services/calcService'
 import {
   sendTelegramNotification,
@@ -36,7 +37,12 @@ function useTelegramNotification() {
       const currencies = holdings.map(h => h.currency)
       const { baseCurrency, apiKeys } = useConfigStore.getState().appConfig
 
-      refreshAll(tickers, currencies, baseCurrency, apiKeys.fmp ?? '')
+      const markets: Record<string, Market> = {}
+      for (const h of holdings) {
+        if (h.market) markets[h.ticker.trim().toUpperCase()] = h.market
+      }
+
+      refreshAll(tickers, currencies, baseCurrency, apiKeys.fmp ?? '', markets)
 
       await new Promise(r => setTimeout(r, 3000))
 

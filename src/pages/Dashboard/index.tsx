@@ -11,6 +11,7 @@ import { useNavigate } from 'react-router-dom'
 import { usePortfolioStore } from '../../stores/portfolioStore'
 import { useQuoteStore } from '../../stores/quoteStore'
 import { useConfigStore } from '../../stores/configStore'
+import type { Market } from '../../types'
 import { calculateCategoryWeights, calcMarketValue, isRebalanceTriggered } from '../../services/calcService'
 import { formatCurrency } from '../../utils/formatters'
 import WeightPieChart from '../../components/charts/WeightPieChart'
@@ -32,8 +33,12 @@ export default function Dashboard() {
     if (holdings.length > 0) {
       const tickers = holdings.map((h) => h.ticker)
       const currencies = holdings.map((h) => h.currency)
+      const markets: Record<string, Market> = {}
+      for (const h of holdings) {
+        if (h.market) markets[h.ticker.trim().toUpperCase()] = h.market
+      }
       const apiKey = appConfig.apiKeys?.fmp ?? ''
-      refreshAll(tickers, currencies, appConfig.baseCurrency, apiKey)
+      refreshAll(tickers, currencies, appConfig.baseCurrency, apiKey, markets)
     }
   }, [holdings, refreshAll, appConfig.baseCurrency, appConfig.apiKeys])
 

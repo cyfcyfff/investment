@@ -4,6 +4,7 @@ import { PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined, MergeOutlin
 import { usePortfolioStore } from '../../stores/portfolioStore'
 import { useQuoteStore } from '../../stores/quoteStore'
 import { CATEGORY_LABELS, Category } from '../../types'
+import type { Market } from '../../types'
 import type { AssetHolding } from '../../types'
 import { formatCurrency, formatNumber } from '../../utils/formatters'
 import HoldingForm from '../../components/forms/HoldingForm'
@@ -39,8 +40,12 @@ export default function Holdings() {
     if (holdings.length > 0) {
       const tickers = holdings.map((h) => h.ticker.trim().toUpperCase())
       const currencies = holdings.map((h) => h.currency)
+      const markets: Record<string, Market> = {}
+      for (const h of holdings) {
+        if (h.market) markets[h.ticker.trim().toUpperCase()] = h.market
+      }
       const apiKey = appConfig.apiKeys?.fmp ?? ''
-      refreshAll(tickers, currencies, appConfig.baseCurrency, apiKey)
+      refreshAll(tickers, currencies, appConfig.baseCurrency, apiKey, markets)
     }
   }, [holdings, appConfig.baseCurrency, appConfig.apiKeys, refreshAll])
 
@@ -219,8 +224,12 @@ export default function Holdings() {
               if (holdings.length > 0) {
                 const tickers = holdings.map((h) => h.ticker.trim().toUpperCase())
                 const currencies = holdings.map((h) => h.currency)
+                const markets: Record<string, Market> = {}
+                for (const h of holdings) {
+                  if (h.market) markets[h.ticker.trim().toUpperCase()] = h.market
+                }
                 const apiKey = appConfig.apiKeys?.fmp ?? ''
-                refreshAll(tickers, currencies, appConfig.baseCurrency, apiKey)
+                refreshAll(tickers, currencies, appConfig.baseCurrency, apiKey, markets)
               }
             }}
             loading={loading || quoteLoading}

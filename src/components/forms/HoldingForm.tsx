@@ -4,38 +4,55 @@ import { Controller, useForm, useWatch, type Resolver } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
 import dayjs from 'dayjs'
-import { CATEGORY_LABELS, Category, CATEGORIES } from '../../types'
+import { Market, MARKET_LABELS, CATEGORY_LABELS, Category, CATEGORIES } from '../../types'
 import type { AssetHolding } from '../../types'
 import { searchTickers, type SearchResult } from '../../services/searchService'
 import { useConfigStore } from '../../stores/configStore'
 
-// 预设资产列表：每个类别下的可选资产
+// 预设资产列表：按 [category][market] 分组
 interface PresetAsset {
   ticker: string
   name: string
   currency: string
+  category: Category
+  market?: Market
 }
 
 const PRESET_ASSETS: Record<Category, PresetAsset[]> = {
   [Category.STOCKS]: [
-    { ticker: 'QQQ', name: '纳斯达克 100 ETF (Invesco QQQ Trust)', currency: 'USD' },
-    { ticker: 'SPY', name: '标普 500 ETF (SPDR S&P 500)', currency: 'USD' },
-    { ticker: '510300.SS', name: '沪深 300 ETF (华泰柏瑞)', currency: 'CNY' },
+    { ticker: 'QQQ', name: '纳斯达克 100 ETF (Invesco QQQ Trust)', currency: 'USD', category: Category.STOCKS, market: Market.US },
+    { ticker: 'VOO', name: '标普 500 ETF (Vanguard S&P 500)', currency: 'USD', category: Category.STOCKS, market: Market.US },
+    { ticker: '510300.SS', name: '沪深 300 ETF (华泰柏瑞)', currency: 'CNY', category: Category.STOCKS, market: Market.CN },
   ],
   [Category.LONG_BONDS]: [
-    { ticker: 'TLT', name: '20年+ 美国国债 ETF (iShares)', currency: 'USD' },
-    { ticker: 'EDV', name: '30年 美国国债 ETF (Vanguard)', currency: 'USD' },
+    { ticker: 'TLT', name: '20年+ 美国国债 ETF (iShares)', currency: 'USD', category: Category.LONG_BONDS, market: Market.US },
+    { ticker: 'EDV', name: '30年 美国国债 ETF (Vanguard)', currency: 'USD', category: Category.LONG_BONDS, market: Market.US },
   ],
   [Category.GOLD]: [
-    { ticker: 'XAUUSD', name: '现货黄金 (XAU/USD)', currency: 'USD' },
-    { ticker: 'GLD', name: '黄金 ETF (SPDR Gold Shares)', currency: 'USD' },
+    { ticker: 'XAUUSD', name: '现货黄金 (XAU/USD)', currency: 'USD', category: Category.GOLD, market: Market.COMMODITY },
+    { ticker: 'GLD', name: '黄金 ETF (SPDR Gold Shares)', currency: 'USD', category: Category.GOLD, market: Market.US },
+    { ticker: '518880.SS', name: '黄金 ETF (华安)', currency: 'CNY', category: Category.GOLD, market: Market.CN },
   ],
   [Category.CASH]: [
-    { ticker: 'BIL', name: '美国超短债 ETF (SPDR 1-3 Month T-Bill)', currency: 'USD' },
+    { ticker: 'BIL', name: '美国超短债 ETF (SPDR 1-3 Month T-Bill)', currency: 'USD', category: Category.CASH, market: Market.US },
   ],
 }
 
 const CURRENCY_OPTIONS = ['USD', 'CNY', 'EUR', 'JPY', 'GBP', 'HKD']
+
+const MARKET_DEFAULT_CURRENCY: Record<Market, string> = {
+  [Market.US]: 'USD',
+  [Market.CN]: 'CNY',
+  [Market.HK]: 'HKD',
+  [Market.COMMODITY]: 'USD',
+}
+
+// 可选市场（用于下拉）
+const MARKET_OPTIONS = [
+  Market.US,
+  Market.CN,
+  Market.HK,
+].map(m => ({ value: m, label: MARKET_LABELS[m] }))
 
 const holdingSchema = z.object({
   name: z.string().min(1, '请输入资产名称'),
@@ -48,6 +65,7 @@ const holdingSchema = z.object({
   quantity: z.number({ message: '请输入数量' }).positive('数量必须大于0'),
   buyDate: z.string().min(1, '请选择买入日期'),
   notes: z.string().default(''),
+  market: z.nativeEnum(Market).optional(),
 })
 
 export type HoldingFormData = z.infer<typeof holdingSchema>
@@ -78,11 +96,13 @@ export default function HoldingForm({ initialValues, onSubmit, onCancel, loading
       quantity: 0,
       buyDate: dayjs().format('YYYY-MM-DD'),
       notes: '',
+      market: undefined,
     },
   })
 
-  // 监听 category 变化，重置 ticker 和 name
+  // 监听 category 和 market 变化
   const watchedCategory = useWatch({ control, name: 'category' })
+  const watchedMarket = useWatch({ control, name: 'market' })
 
   useEffect(() => {
     if (initialValues) {
@@ -95,11 +115,12 @@ export default function HoldingForm({ initialValues, onSubmit, onCancel, loading
         quantity: initialValues.quantity ?? 0,
         buyDate: initialValues.buyDate ?? dayjs().format('YYYY-MM-DD'),
         notes: initialValues.notes ?? '',
+        market: initialValues.market,
       })
     }
   }, [initialValues, reset])
 
-  // 切换类别时清空 ticker 和 name（编辑模式不触发）
+  // 切换 category 时清空 ticker 和 name（编辑模式不触发）
   useEffect(() => {
     if (!initialValues) {
       setValue('ticker', '')
@@ -107,8 +128,22 @@ export default function HoldingForm({ initialValues, onSubmit, onCancel, loading
     }
   }, [watchedCategory, initialValues, setValue])
 
+  // 切换 market 时清空 ticker、name，并设置默认货币（编辑模式不触发）
+  useEffect(() => {
+    if (!initialValues && watchedMarket) {
+      setValue('ticker', '')
+      setValue('name', '')
+      setValue('currency', MARKET_DEFAULT_CURRENCY[watchedMarket] ?? 'USD')
+    }
+  }, [watchedMarket, initialValues, setValue])
+
   const watchedTicker = useWatch({ control, name: 'ticker' })
-  const currentOptions = PRESET_ASSETS[watchedCategory] ?? []
+  // 预设资产：按 category 过滤，再按 market 过滤
+  const currentPresets = useMemo(() => {
+    const byCategory = PRESET_ASSETS[watchedCategory] ?? []
+    if (!watchedMarket) return byCategory
+    return byCategory.filter(a => a.market === watchedMarket || !a.market)
+  }, [watchedCategory, watchedMarket])
 
   // --- 搜索功能 ---
   const [searchResults, setSearchResults] = useState<SearchResult[]>([])
@@ -122,16 +157,18 @@ export default function HoldingForm({ initialValues, onSubmit, onCancel, loading
       setValue('ticker', found.symbol)
       setValue('name', found.name)
       setValue('currency', found.currency)
+      setValue('market', found.market)
       return
     }
     // 回退到预设资产
-    const preset = currentOptions.find(a => a.ticker === value)
+    const preset = currentPresets.find(a => a.ticker === value)
     if (preset) {
       setValue('ticker', preset.ticker)
       setValue('name', preset.name)
       setValue('currency', preset.currency)
+      if (preset.market) setValue('market', preset.market)
     }
-  }, [searchResults, currentOptions, setValue])
+  }, [searchResults, currentPresets, setValue])
 
   const handleSearch = useCallback((query: string) => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
@@ -143,14 +180,18 @@ export default function HoldingForm({ initialValues, onSubmit, onCancel, loading
     setSearchLoading(true)
     debounceRef.current = setTimeout(async () => {
       const results = await searchTickers(query, apiKey || undefined)
-      setSearchResults(results)
+      // 按当前选中的市场过滤搜索结果
+      const filtered = watchedMarket
+        ? results.filter(r => r.market === watchedMarket)
+        : results
+      setSearchResults(filtered)
       setSearchLoading(false)
     }, 300)
-  }, [appConfig.apiKeys?.fmp])
+  }, [appConfig.apiKeys?.fmp, watchedMarket])
 
   // 合并下拉选项：搜索结果 + 预设资产
   const dropdownOptions = useMemo(() => {
-    const presetOpt = currentOptions.map(a => ({
+    const presetOpt = currentPresets.map(a => ({
       value: a.ticker,
       label: `${a.name} (${a.ticker})`,
     }))
@@ -160,7 +201,7 @@ export default function HoldingForm({ initialValues, onSubmit, onCancel, loading
       label: `${r.name} (${r.symbol})${r.exchangeShortName ? ` — ${r.exchangeShortName}` : ''}`,
     }))
     return searchOpt
-  }, [currentOptions, searchResults])
+  }, [currentPresets, searchResults])
 
   const handleFinish = useCallback(() => {
     void handleSubmit(onSubmit)()
@@ -190,8 +231,26 @@ export default function HoldingForm({ initialValues, onSubmit, onCancel, loading
       </Form.Item>
 
       <Form.Item
+        label="市场"
+        help="选择交易市场，决定行情数据来源和搜索范围"
+      >
+        <Controller
+          name="market"
+          control={control}
+          render={({ field }) => (
+            <Select
+              {...field}
+              placeholder="选择市场..."
+              allowClear
+              options={MARKET_OPTIONS}
+            />
+          )}
+        />
+      </Form.Item>
+
+      <Form.Item
         label="搜索标的"
-        extra="输入代码或名称搜索（如 AAPL、600900），也可从下拉列表选择预设资产"
+        extra="输入代码或名称搜索（如 AAPL、600900、黄金ETF），也可从下拉选择预设资产"
       >
         <Select
           placeholder="输入代码或名称搜索..."
@@ -222,7 +281,7 @@ export default function HoldingForm({ initialValues, onSubmit, onCancel, loading
           render={({ field }) => (
             <Input
               {...field}
-              placeholder="选择预设资产后自动填入，也可手动输入"
+              placeholder="选择资产后自动填入，也可手动输入"
               style={{ textTransform: 'uppercase' }}
             />
           )}
@@ -238,7 +297,7 @@ export default function HoldingForm({ initialValues, onSubmit, onCancel, loading
         <Controller
           name="name"
           control={control}
-          render={({ field }) => <Input {...field} placeholder="选择预设资产后自动填入，也可手动输入" />}
+          render={({ field }) => <Input {...field} placeholder="选择资产后自动填入，也可手动输入" />}
         />
       </Form.Item>
 

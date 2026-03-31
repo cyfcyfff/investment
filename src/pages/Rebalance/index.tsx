@@ -11,7 +11,7 @@ import { calculateCategoryWeights, isRebalanceTriggered } from '../../services/c
 import { createSnapshot } from '../../services/snapshotService'
 import { formatCurrency } from '../../utils/formatters'
 import { CATEGORY_LABELS, Category } from '../../types'
-import type { RebalancePlan, RebalanceTrade, DistributionConfig, HoldingWithQuote } from '../../types'
+import type { Market, RebalancePlan, RebalanceTrade, DistributionConfig, HoldingWithQuote } from '../../types'
 import type { TradeRecordFormData } from '../../components/forms/TradeRecordForm'
 import WeightComparisonChart from '../../components/charts/WeightComparisonChart'
 import TradeRecordForm from '../../components/forms/TradeRecordForm'
@@ -37,7 +37,11 @@ export default function Rebalance() {
     if (holdings.length > 0) {
       const tickers = holdings.map(h => h.ticker)
       const currencies = holdings.map(h => h.currency)
-      refreshAll(tickers, currencies, appConfig.baseCurrency, appConfig.apiKeys.fmp ?? '')
+      const markets: Record<string, Market> = {}
+      for (const h of holdings) {
+        if (h.market) markets[h.ticker.trim().toUpperCase()] = h.market
+      }
+      refreshAll(tickers, currencies, appConfig.baseCurrency, appConfig.apiKeys.fmp ?? '', markets)
     }
   }, [holdings, appConfig.baseCurrency, appConfig.apiKeys, refreshAll])
 
